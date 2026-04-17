@@ -29,6 +29,10 @@ export class BinaryLoader{
 			url += '.bin';
 		}
 
+		if (node.pcoGeometry.queryString) {
+			url += node.pcoGeometry.queryString;
+		}
+
 		let xhr = XHRFactory.createXMLHttpRequest();
 		xhr.open('GET', url, true);
 		xhr.responseType = 'arraybuffer';

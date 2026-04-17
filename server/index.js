@@ -1,3 +1,6 @@
+// Load startup initialization (must be first)
+require('./startup');
+
 const express = require('express');
 const cors = require('cors');
 const path = require('path');
