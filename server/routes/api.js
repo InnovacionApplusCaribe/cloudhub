@@ -7,6 +7,7 @@ const fs = require('fs');
 const config = require('../config');
 const azureStorage = require('../services/azureStorage');
 const converter = require('../services/converter');
+const blobUploader = require('../services/blobUploader');
 
 // Shared Job tracking
 const jobs = new Map();
@@ -82,11 +83,37 @@ router.post('/upload', (req, res, next) => {
     jobs.set(jobId, job);
 
     const filePaths = files.map(f => f.path);
-    converter.convert(filePaths, outputPath, (type, data) => {
+    converter.convert(filePaths, outputPath, async (type, data) => {
         if (type === 'close') {
             job.status = data === 0 ? 'completed' : 'failed';
             job.progress = data === 0 ? 100 : 0;
             if (data !== 0) job.error = `Exit code ${data}`;
+
+            // If on Azure and conversion succeeded, upload to blob storage
+            if (data === 0 && config.azure.isCloudEnabled && config.azure.isAzureAppService) {
+                try {
+                    console.log(`[Job ${jobId}] Starting cloud upload to Azure Blob Storage...`);
+                    const cloudUrl = await blobUploader.uploadConvertedProject(
+                        outputPath,
+                        path.basename(outputPath)
+                    );
+                    job.outputPath = cloudUrl;
+                    job.storageMode = 'cloud';
+                    job.cloudUploadStatus = 'success';
+                    console.log(`[Job ${jobId}] Cloud upload successful`);
+
+                    // Optional: cleanup local copy to save disk space (uncomment if desired)
+                    // blobUploader.cleanupLocal(outputPath);
+                    // job.localCleanupStatus = 'cleaned';
+                } catch (uploadErr) {
+                    console.error(`[Job ${jobId}] Cloud upload failed:`, uploadErr.message);
+                    job.warning = 'Conversion complete but cloud upload failed - file available locally';
+                    job.cloudUploadStatus = 'failed';
+                    job.cloudUploadError = uploadErr.message;
+                }
+            } else if (data !== 0) {
+                console.log(`[Job ${jobId}] Conversion failed with exit code ${data}`);
+            }
 
             // Log completion
             console.log(`[Job ${jobId}] Finished with status: ${job.status}`);
@@ -101,11 +128,24 @@ router.post('/upload', (req, res, next) => {
 });
 
 router.get('/upload-sas', async (req, res) => {
+    const fileName = req.query.fileName;
+    
+    if (!fileName) {
+        return res.status(400).json({ error: 'fileName parameter required' });
+    }
+
     try {
-        const result = await azureStorage.getUploadSas(req.query.fileName);
+        console.log(`[SAS Upload] Generating SAS URL for: ${fileName}`);
+        const result = await azureStorage.getUploadSas(fileName);
+        console.log(`[SAS Upload] Success: ${result.blobName}`);
         res.json(result);
     } catch (err) {
-        res.status(500).json({ error: err.message });
+        console.error(`[SAS Upload] Error:`, err.message);
+        console.error(err.stack);
+        res.status(500).json({ 
+            error: err.message,
+            details: process.env.NODE_ENV === 'development' ? err.stack : undefined
+        });
     }
 });
 
@@ -129,7 +169,8 @@ router.post('/trigger-conversion-cloud', async (req, res) => {
             if (type === 'close' && data === 0) {
                 try {
                     await azureStorage.uploadDirectory(localOutputPath, outputDirName);
-                    const cloudUrl = `https://${config.azure.accountName}.blob.core.windows.net/${config.azure.convertedContainer}/${outputDirName}/metadata.json`;
+                    // Auto-detect the actual manifest file path
+                    const cloudUrl = await azureStorage.resolveCloudManifestUrl(outputDirName);
                     azureStorage.saveAzureProject({ name: outputDirName, url: cloudUrl, type: 'pointcloud', storageMode: 'cloud' });
                     job.status = 'completed'; job.progress = 100; job.outputPath = cloudUrl;
                 } catch (e) { job.status = 'failed'; job.error = e.message; }
@@ -154,12 +195,50 @@ router.get('/status/:id', (req, res) => {
     job ? res.json(job) : res.status(404).json({ error: 'Job not found' });
 });
 
-router.get('/list', (req, res) => {
-    fs.readdir(config.convertedDir, { withFileTypes: true }, (err, files) => {
+router.get('/list', async (req, res) => {
+    try {
+        const files = fs.readdirSync(config.convertedDir, { withFileTypes: true });
         const local = (files || []).filter(d => d.isDirectory()).map(d => ({
             name: d.name, url: `/pointclouds/converted/${d.name}/index.html`, type: 'pointcloud', storageMode: 'local'
         }));
-        const cloud = azureStorage.getAzureProjects();
+        
+        let cloud = azureStorage.getAzureProjects();
+        if (config.azure.isCloudEnabled && cloud.length > 0) {
+            try {
+                const sasToken = await azureStorage.getReadSasToken();
+                let healed = false;
+                cloud = await Promise.all(cloud.map(async (p) => {
+                    let url = p.url;
+                    // Auto-heal: if stored URL points to metadata.json but blob doesn't exist,
+                    // resolve the actual manifest path
+                    if (url.includes('metadata.json')) {
+                        try {
+                            const correctedUrl = await azureStorage.resolveCloudManifestUrl(p.name);
+                            if (correctedUrl !== url) {
+                                console.log(`[API List] Auto-healed URL for ${p.name}: ${url} -> ${correctedUrl}`);
+                                url = correctedUrl;
+                                healed = true;
+                            }
+                        } catch (e) {
+                            console.warn(`[API List] Could not resolve manifest for ${p.name}:`, e.message);
+                        }
+                    }
+                    // Strip any old SAS token and append fresh one
+                    const baseUrl = url.split('?')[0];
+                    return { ...p, url: `${baseUrl}?${sasToken}` };
+                }));
+                // Persist healed URLs back to disk
+                if (healed) {
+                    const healedProjects = cloud.map(p => ({
+                        ...p,
+                        url: p.url.split('?')[0] // Save without SAS token
+                    }));
+                    fs.writeFileSync(config.azureProjectsFile, JSON.stringify(healedProjects, null, 2));
+                }
+            } catch (sasErr) {
+                console.error('[API List] Failed to generate Read SAS:', sasErr.message);
+            }
+        }
 
         let examples = [];
         const exDir = path.join(__dirname, '../../examples');
@@ -169,7 +248,10 @@ router.get('/list', (req, res) => {
             }));
         }
         res.json({ uploads: [...local, ...cloud], examples });
-    });
+    } catch (err) {
+        console.error('[API List] Error:', err);
+        res.status(500).json({ error: 'Failed to list projects' });
+    }
 });
 
 router.delete('/delete/:id', async (req, res) => {

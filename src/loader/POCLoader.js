@@ -122,6 +122,13 @@ export class POCLoader {
 		try {
 			let pco = new PointCloudOctreeGeometry();
 			pco.url = url;
+
+			// Separate query string (e.g. SAS token) from the base URL
+			// so path construction doesn't embed the query in directory paths
+			let baseUrl = url.split('?')[0];
+			let queryString = url.includes('?') ? '?' + url.split('?').slice(1).join('?') : '';
+			pco.queryString = queryString;
+
 			let xhr = XHRFactory.createXMLHttpRequest();
 			xhr.open('GET', url, true);
 
@@ -135,7 +142,7 @@ export class POCLoader {
 					if (fMno.octreeDir.indexOf('http') === 0) {
 						pco.octreeDir = fMno.octreeDir;
 					} else {
-						pco.octreeDir = url + '/../' + fMno.octreeDir;
+						pco.octreeDir = baseUrl + '/../' + fMno.octreeDir;
 					}
 
 					pco.spacing = fMno.spacing;

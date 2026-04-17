@@ -1,0 +1,13 @@
+# Treat PotreeConverter binaries as binary files
+PotreeConverter/linux/PotreeConverter binary -diff
+PotreeConverter/*.exe binary -diff
+
+# Other binary files
+*.jpg binary
+*.png binary
+*.gif binary
+*.zip binary
+*.tar binary
+*.gz binary
+*.las binary
+*.laz binary
