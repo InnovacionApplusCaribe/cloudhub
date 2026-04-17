@@ -848,6 +848,8 @@ export class Utils {
 			return `${Potree.resourcePath}/icons/volume.svg`;
 		} else if (measurement instanceof PolygonClipVolume) {
 			return `${Potree.resourcePath}/icons/clip-polygon.svg`;
+		} else if (measurement.type === "GisLayer") {
+			return `${Potree.resourcePath}/icons/triangle.svg`;
 		}
 	}
 

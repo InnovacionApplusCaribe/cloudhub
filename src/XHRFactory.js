@@ -29,4 +29,4 @@ const XHRFactory = {
 	}
 };
 
-export {XHRFactory};
+export { XHRFactory };

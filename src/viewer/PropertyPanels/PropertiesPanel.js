@@ -22,6 +22,7 @@ import {ProfilePanel} from "./ProfilePanel.js";
 import {CameraPanel} from "./CameraPanel.js";
 import {AnnotationPanel} from "./AnnotationPanel.js";
 import { CameraAnimationPanel } from "./CameraAnimationPanel.js";
+import { GisPanel } from "./GisPanel.js";
 
 export class PropertiesPanel{
 
@@ -60,8 +61,14 @@ export class PropertiesPanel{
 			this.setAnnotation(object);
 		}else if(object instanceof CameraAnimation){
 			this.setCameraAnimation(object);
+		}else if(object.type === "GisLayer" || object.type === "GisFeature"){
+			this.setGisLayer(object);
 		}
 		
+	}
+
+	setGisLayer(object){
+		let panel = new GisPanel(this.viewer, object, this);
 	}
 
 	//

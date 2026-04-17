@@ -1,160 +1,291 @@
 
 import * as THREE from "../../libs/three.js/build/three.module.js";
-import {Line2} from "../../libs/three.js/lines/Line2.js";
-import {LineGeometry} from "../../libs/three.js/lines/LineGeometry.js";
-import {LineMaterial} from "../../libs/three.js/lines/LineMaterial.js";
+import { GisLayer } from "../utils/GisLayer.js";
 
-export class ShapefileLoader{
+export class ShapefileLoader {
 
-	constructor(){
+	constructor() {
 		this.transform = null;
+		this.offset = new THREE.Vector3(0, 0, 0);
+		this.defaultZ = null;
 	}
 
-	async load(path){
-
-		const matLine = new LineMaterial( {
-			color: 0xff0000,
-			linewidth: 3, // in pixels
-			resolution:  new THREE.Vector2(1000, 1000),
-			dashed: false
-		} );
-
+	async load(path) {
 		const features = await this.loadShapefileFeatures(path);
-		const node = new THREE.Object3D();
-		
-		for(const feature of features){
-			const fnode = this.featureToSceneNode(feature, matLine);
-			node.add(fnode);
-		}
-
-		let setResolution = (x, y) => {
-			matLine.resolution.set(x, y);
-		};
-
-		const result = {
-			features: features,
-			node: node,
-			setResolution: setResolution,
-		};
-
-		return result;
-	}
-
-	featureToSceneNode(feature, matLine){
-		let geometry = feature.geometry;
-		
-		let color = new THREE.Color(1, 1, 1);
+		const node = new GisLayer("Shapefile Layer");
 
 		let transform = this.transform;
-		if(transform === null){
-			transform = {forward: (v) => v};
+		if (transform === null) {
+			transform = { forward: (v) => v };
 		}
-		
-		if(feature.geometry.type === "Point"){
-			let sg = new THREE.SphereGeometry(1, 18, 18);
-			let sm = new THREE.MeshNormalMaterial();
-			let s = new THREE.Mesh(sg, sm);
-			
-			let [long, lat] = geometry.coordinates;
-			let pos = transform.forward([long, lat]);
-			
-			s.position.set(...pos, 20);
-			
-			s.scale.set(10, 10, 10);
-			
-			return s;
-		}else if(geometry.type === "LineString"){
-			let coordinates = [];
-			
-			let min = new THREE.Vector3(Infinity, Infinity, Infinity);
-			for(let i = 0; i < geometry.coordinates.length; i++){
-				let [long, lat] = geometry.coordinates[i];
-				let pos = transform.forward([long, lat]);
-				
-				min.x = Math.min(min.x, pos[0]);
-				min.y = Math.min(min.y, pos[1]);
-				min.z = Math.min(min.z, 20);
-				
-				coordinates.push(...pos, 20);
-				if(i > 0 && i < geometry.coordinates.length - 1){
-					coordinates.push(...pos, 20);
+
+		if (features.length > 0) {
+			let firstGeom = features[0].geometry;
+			let sampleCoords = null;
+			if (firstGeom && firstGeom.type === "Point") {
+				sampleCoords = firstGeom.coordinates;
+			} else if (firstGeom && firstGeom.type === "LineString" && firstGeom.coordinates.length > 0) {
+				sampleCoords = firstGeom.coordinates[0];
+			} else if (firstGeom && (firstGeom.type === "Polygon" || firstGeom.type === "MultiPolygon") && firstGeom.coordinates.length > 0) {
+				const poly = firstGeom.type === "Polygon" ? firstGeom.coordinates : firstGeom.coordinates[0];
+				if (poly.length > 0 && poly[0].length > 0) {
+					sampleCoords = poly[0][0];
 				}
 			}
-			
-			for(let i = 0; i < coordinates.length; i += 3){
-				coordinates[i+0] -= min.x;
-				coordinates[i+1] -= min.y;
-				coordinates[i+2] -= min.z;
-			}
-			
-			const lineGeometry = new LineGeometry();
-			lineGeometry.setPositions( coordinates );
 
-			const line = new Line2( lineGeometry, matLine );
-			line.computeLineDistances();
-			line.scale.set( 1, 1, 1 );
-			line.position.copy(min);
-			
-			return line;
-		}else if(geometry.type === "Polygon"){
-			for(let pc of geometry.coordinates){
-				let coordinates = [];
-				
-				let min = new THREE.Vector3(Infinity, Infinity, Infinity);
-				for(let i = 0; i < pc.length; i++){
-					let [long, lat] = pc[i];
-					let pos = transform.forward([long, lat]);
-					
-					min.x = Math.min(min.x, pos[0]);
-					min.y = Math.min(min.y, pos[1]);
-					min.z = Math.min(min.z, 20);
-					
-					coordinates.push(...pos, 20);
-					if(i > 0 && i < pc.length - 1){
-						coordinates.push(...pos, 20);
+			// Heuristic: If coordinate values are completely outside WGS84 Long/Lat bounds, 
+			// it means they are already projected, so we should skip WGS84->Local projection.
+			if (sampleCoords && this.transform !== null) {
+				if (Math.abs(sampleCoords[0]) > 180 || Math.abs(sampleCoords[1]) > 90) {
+					console.warn("Shapefile coordinates appear to be already projected. Skipping WGS84 transform.");
+					transform = { forward: (v) => v };
+				}
+			}
+		}
+
+		const pointPositions = [];
+		const linePositions = [];
+		const shapesArray = [];
+
+		if (this.defaultZ === null) {
+			this.defaultZ = this.offset.z;
+		}
+		const defaultZ = this.defaultZ;
+
+		for (const feature of features) {
+			const geometry = feature.geometry;
+			if (!geometry) continue;
+
+			if (geometry.type === "Point") {
+				const [long, lat] = geometry.coordinates;
+				const zInput = geometry.coordinates[2] || defaultZ;
+				// transform.forward already includes CRS projection AND offset adjustment
+				const p = transform.forward([long, lat, zInput]);
+
+				// Explicitly subtract pointcloud offset to avoid Earcut/precision errors
+				const x = p[0] - this.offset.x;
+				const y = p[1] - this.offset.y;
+				const z = (p[2] !== undefined ? p[2] : zInput) - this.offset.z;
+
+				geometry.coordinates = [x, y, z]; // Update for picking
+				pointPositions.push(x, y, z);
+			} else if (geometry.type === "LineString") {
+				const coords = geometry.coordinates;
+				for (let i = 0; i < coords.length; i++) {
+					const zInput = coords[i][2] || defaultZ;
+					// transform.forward already handles CRS projection and offset
+					const p = transform.forward([coords[i][0], coords[i][1], zInput]);
+
+					const x = p[0] - this.offset.x;
+					const y = p[1] - this.offset.y;
+					const z = (p[2] !== undefined ? p[2] : zInput) - this.offset.z;
+
+					coords[i] = [x, y, z]; // Update for picking
+
+					if (i < coords.length - 1) {
+						const nextZInput = coords[i + 1][2] || defaultZ;
+						const nextP = transform.forward([coords[i + 1][0], coords[i + 1][1], nextZInput]);
+
+						const nextX = nextP[0] - this.offset.x;
+						const nextY = nextP[1] - this.offset.y;
+						const nextZ = (nextP[2] !== undefined ? nextP[2] : nextZInput) - this.offset.z;
+
+						linePositions.push(x, y, z);
+						linePositions.push(nextX, nextY, nextZ);
 					}
 				}
-				
-				for(let i = 0; i < coordinates.length; i += 3){
-					coordinates[i+0] -= min.x;
-					coordinates[i+1] -= min.y;
-					coordinates[i+2] -= min.z;
+			} else if (geometry.type === "Polygon" || geometry.type === "MultiPolygon") {
+				const parsePolygon = (polygonCoords) => {
+					if (!polygonCoords || polygonCoords.length === 0) return;
+
+					let shape = new THREE.Shape();
+					let shapeZ = defaultZ;  // Will store transformed Z coordinate
+					let outerRing = polygonCoords[0];
+
+					for (let i = 0; i < outerRing.length; i++) {
+						const zInput = outerRing[i][2] !== undefined ? outerRing[i][2] : defaultZ;
+
+						// transform.forward already handles all coordinate transformations
+						const p = transform.forward([outerRing[i][0], outerRing[i][1], zInput]);
+
+						const x = p[0] - this.offset.x;
+						const y = p[1] - this.offset.y;
+						const z = (p[2] !== undefined ? p[2] : zInput) - this.offset.z;
+
+						if (i === 0) {
+							shapeZ = z;  // Store the first (transformed) Z value
+						}
+
+						outerRing[i] = [x, y, z]; // Update for picking
+
+						if (i === 0) shape.moveTo(x, y);
+						else shape.lineTo(x, y);
+					}
+
+					for (let r = 1; r < polygonCoords.length; r++) {
+						let hole = new THREE.Path();
+						let holeRing = polygonCoords[r];
+						for (let i = 0; i < holeRing.length; i++) {
+							const zInput = holeRing[i][2] !== undefined ? holeRing[i][2] : defaultZ;
+							const p = transform.forward([holeRing[i][0], holeRing[i][1], zInput]);
+
+							const x = p[0] - this.offset.x;
+							const y = p[1] - this.offset.y;
+							const z = (p[2] !== undefined ? p[2] : zInput) - this.offset.z;
+
+							holeRing[i] = [x, y, z]; // Update for picking
+
+							if (i === 0) hole.moveTo(x, y);
+							else hole.lineTo(x, y);
+						}
+						shape.holes.push(hole);
+					}
+
+					// Store the transformed Z coordinate (already adjusted for offset)
+					shape.zOffset = shapeZ;
+					shapesArray.push(shape);
+				};
+
+				if (geometry.type === "Polygon") {
+					parsePolygon(geometry.coordinates);
+				} else {
+					for (const polyCoords of geometry.coordinates) {
+						parsePolygon(polyCoords);
+					}
+				}
+			}
+		}
+
+		// ━━━ ENHANCED VISUALIZATION: Match Measurements Tool Aesthetic ━━━
+
+		// Create 3D Point Markers (NOT flat points like PointsMaterial)
+		if (pointPositions.length > 0) {
+			const pointGroup = new THREE.Group();
+			pointGroup.name = "Point Markers";
+
+			const sphereGeometry = new THREE.SphereGeometry(0.8, 12, 12);  // Like Measure tool
+			const pointMaterial = new THREE.MeshLambertMaterial({
+				color: 0x00FF41,  // Neon green
+				depthTest: false,
+				depthWrite: false
+			});
+
+			// Create individual sphere meshes for each point
+			for (let i = 0; i < pointPositions.length; i += 3) {
+				const sphere = new THREE.Mesh(sphereGeometry, pointMaterial);
+				sphere.position.set(pointPositions[i], pointPositions[i + 1], pointPositions[i + 2]);
+				sphere.scale.set(1, 1, 1);
+				pointGroup.add(sphere);
+			}
+
+			node.pointsMesh = pointGroup;
+			node.add(pointGroup);
+		}
+
+		// Create Lines with Enhanced Styling
+		if (linePositions.length > 0) {
+			const geometry = new THREE.BufferGeometry();
+			geometry.setAttribute('position', new THREE.Float32BufferAttribute(linePositions, 3));
+
+			// Use LineBasicMaterial with enhanced visibility
+			const material = new THREE.LineBasicMaterial({
+				color: 0x00FF41,  // Neon green (matches points)
+				linewidth: 3,  // Note: only works on some systems; we'll handle via ShaderMaterial if needed
+				depthTest: false,  // Always render on top
+				depthWrite: false,
+				transparent: true,
+				opacity: 0.95
+			});
+
+			const segments = new THREE.LineSegments(geometry, material);
+			segments.renderOrder = 10;
+			node.linesMesh = segments;
+			node.add(segments);
+		}
+
+		// Create Polygon Meshes with Semi-Transparent Fill
+		if (shapesArray.length > 0) {
+			const polygonGroup = new THREE.Group();
+			polygonGroup.name = "Polygons";
+
+			const GeometryClass = THREE.ShapeBufferGeometry || THREE.ShapeGeometry;
+
+			// Material for polygon fills (semi-transparent)
+			const fillMaterial = new THREE.MeshLambertMaterial({
+				color: 0x00FF41,
+				opacity: 0.40,  // Semi-transparent
+				transparent: true,
+				side: THREE.DoubleSide,
+				depthTest: false,
+				depthWrite: false,
+				wireframe: false
+			});
+
+			// Material for polygon outlines (solid edges)
+			const outlineMaterial = new THREE.LineBasicMaterial({
+				color: 0x00FF41,
+				linewidth: 2,
+				depthTest: false,
+				depthWrite: false,
+				transparent: true,
+				opacity: 1.0
+			});
+
+			// Create mesh for each shape with both fill and outline
+			for (const shape of shapesArray) {
+				const geometry = new GeometryClass(shape);
+				const shapeZ = shape.zOffset !== undefined ? shape.zOffset : 0;
+
+				// Set Z coordinate for filled mesh
+				if (geometry.attributes && geometry.attributes.position) {
+					const posAttr = geometry.attributes.position;
+					for (let i = 0; i < posAttr.count; i++) {
+						posAttr.setZ(i, shapeZ);
+					}
+				} else if (geometry.vertices) {
+					for (let i = 0; i < geometry.vertices.length; i++) {
+						geometry.vertices[i].z = shapeZ;
+					}
 				}
 
-				const lineGeometry = new LineGeometry();
-				lineGeometry.setPositions( coordinates );
+				// Create filled mesh
+				const fillMesh = new THREE.Mesh(geometry, fillMaterial);
+				fillMesh.renderOrder = 10;
+				polygonGroup.add(fillMesh);
 
-				const line = new Line2( lineGeometry, matLine );
-				line.computeLineDistances();
-				line.scale.set( 1, 1, 1 );
-				line.position.copy(min);
-				
-				return line;
+				// Create outline edges (separate geometry for better visibility)
+				const outlineGeometry = new THREE.EdgesGeometry(geometry, 0.1);
+				const outlineMesh = new THREE.LineSegments(outlineGeometry, outlineMaterial);
+				outlineMesh.position.copy(fillMesh.position);
+				outlineMesh.renderOrder = 11;  // Render on top of fill
+				polygonGroup.add(outlineMesh);
 			}
-		}else{
-			console.log("unhandled feature: ", feature);
+
+			node.polygonMesh = polygonGroup;
+			node.add(polygonGroup);
 		}
+
+		node.setFeatures(features, node);
+
+		return {
+			features: features,
+			node: node
+		};
 	}
 
-	async loadShapefileFeatures(file){
+	async loadShapefileFeatures(file) {
 		let features = [];
-
 		let source = await shapefile.open(file);
 
-		while(true){
+		while (true) {
 			let result = await source.read();
-
-			if (result.done) {
-				break;
-			}
+			if (result.done) break;
 
 			if (result.value && result.value.type === 'Feature' && result.value.geometry !== undefined) {
 				features.push(result.value);
 			}
 		}
-
 		return features;
 	}
 
 };
-

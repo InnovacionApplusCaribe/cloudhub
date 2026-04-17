@@ -27,26 +27,25 @@
 
 :root{
 	
-	--color-0: 			rgba( 25, 40, 44, 1);
-	--color-1: 			rgba(122,129,132, 1);
-	--color-2: 			rgba( 57, 71, 75, 1);
-	--color-3: 			rgba( 45,109,130, 1);
-	--color-4: 			rgba( 16,143,185, 1);
+	--color-0: 			#000000;
+	--color-1: 			#212121;
+	--color-2: 			#212121;
+	--color-3: 			#FF6900;
+	--color-4: 			#FF6900;
 	
 	--bg-color:			var(--color-0);
-	--bg-color-2:		rgb(60, 80, 85);
-	--bg-light-color:	rgba( 48, 61, 65, 1);
-	--bg-dark-color:	rgba( 24, 31, 33, 1);
+	--bg-color-2:		#212121;
+	--bg-light-color:	#212121;
+	--bg-dark-color:	#000000;
 	--bg-hover-color:	var(--color-2);
 	
-	--font-color:		#9AA1A4;
-	--font-color-2:		#ddd;
-	--font-color:		#cccccc;
+	--font-color:		#E4DEDC;
+	--font-color-2:		#E4DEDC;
 	--border-color:		black;
 	
-	--measurement-detail-node-bg-light:		var(--color-1);
-	--measurement-detail-node-bg-dark:		var(--color-2);
-	--measurement-detail-area-bg-color:		#eee;
+	--measurement-detail-node-bg-light:		#212121;
+	--measurement-detail-node-bg-dark:		#000000;
+	--measurement-detail-area-bg-color:		#212121;
 
 	
 }
@@ -661,11 +660,11 @@ body{
 
 .jstree-default .jstree-clicked{
 	/*background-color: #ffffff !important;*/
-	background-color: #34494f !important;
+	background-color: #FF6900 !important;
 }
 
 .jstree-default .jstree-hovered{
-	background-color: #34494f !important;
+	background-color: #212121 !important;
 }
 
 .jstree-anchor{
@@ -673,14 +672,14 @@ body{
 }
 
 .ui-state-default{
-	background: #a6a9aa !important;
+	background: #212121 !important;
 	border: 1px solid black;
-	color: black;
+	color: #E4DEDC;
 }
 
 .ui-state-active{
-	background: #c6c9ca !important;
-	color: black !important;
+	background: #FF6900 !important;
+	color: #E4DEDC !important;
 }
 
 .cesium-viewer .cesium-viewer-cesiumWidgetContainer{
@@ -708,7 +707,7 @@ body{
 	bottom: 0px;
 	border: 1px solid black;
 	border-radius: 3px;
-	background-color: rgb(166, 169, 170);
+	background-color: #212121;
 	width: 8px;
 	user-select: none;
 	width: 1.2em;
@@ -721,19 +720,19 @@ body{
 	bottom: 0px;
 	border: 1px solid black;
 	border-radius: 3px;
-	background-color: rgb(166, 169, 170);
+	background-color: #212121;
 	width: 8px;
 	user-select: none;
 	width: 1.2em;
 	height: 1.2em;
 	top: calc(50% - 0.6em);
-	color: black;
+	color: #E4DEDC;
 	font-weight: bold;
 	font-size: 1.2em;
 	font-family: arial;
 }
 .zs_handle:hover{
-	background-color: lightgreen;
+	background-color: #FF6900;
 }
 .zs_inside{
 	position: absolute !important;

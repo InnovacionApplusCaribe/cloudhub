@@ -1,0 +1,175 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="description" content="CloudHub Caribe — 3D Point Cloud & GIS Project Management Platform">
+    <title>CloudHub Caribe — Project Management</title>
+    <link rel="stylesheet" href="style.css">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link rel="icon"
+        href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>💠</text></svg>">
+    <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;600;800&display=swap"
+        rel="stylesheet">
+</head>
+
+<body class="dystopian-theme">
+    <div class="scanlines"></div>
+    <div class="noise"></div>
+
+    <nav class="sidebar">
+        <div class="logo">
+            <span class="logo-icon">💠</span>
+            <span class="logo-text">CloudHub Caribe</span>
+        </div>
+        <ul class="nav-links">
+            <li class="active" data-section="dashboard"><span class="icon">📈</span> Dashboard</li>
+            <li data-section="examples"><span class="icon">📚</span> Standard Examples</li>
+            <li data-section="uploads"><span class="icon">📁</span> Project Assets</li>
+        </ul>
+        <div class="sidebar-footer">
+            <p>Server Status: <span id="server-status-dot" style="color:var(--accent)">Online</span></p>
+            <p id="sidebar-project-count">Projects: 0</p>
+        </div>
+    </nav>
+
+    <main class="content">
+        <header class="top-bar">
+            <div class="header-main">
+                <h1>Project Management</h1>
+                <p class="matrix-text">Spatial data platform — point cloud & GIS layer management</p>
+            </div>
+            <div class="user-actions">
+                <button class="btn btn-primary" id="new-upload-btn">+ New Project</button>
+            </div>
+        </header>
+
+        <section id="dashboard-section" class="active-section">
+            <div class="stats-grid">
+                <div class="stat-card">
+                    <div class="label">Total Projects</div>
+                    <div class="stat-value" id="total-projects-count">0</div>
+                </div>
+                <div class="stat-card">
+                    <div class="label">Library Examples</div>
+                    <div class="stat-value" id="examples-count">0</div>
+                </div>
+                <div class="stat-card">
+                    <div class="label">System Status</div>
+                    <div class="stat-value" id="storage-used">Optimal</div>
+                </div>
+            </div>
+
+            <div class="section-header">
+                <h2>Recent Projects</h2>
+                <span class="section-hint">Click a project to open the 3D viewer</span>
+            </div>
+            <div id="recent-uploads-grid" class="item-grid">
+                <div class="empty-state" id="no-projects-msg">
+                    <p>No projects yet. Create your first project by uploading a point cloud.</p>
+                    <button class="btn btn-primary" onclick="document.getElementById('new-upload-btn').click()">+ New
+                        Project</button>
+                </div>
+            </div>
+        </section>
+
+        <section id="examples-section" class="hidden">
+            <div class="section-header">
+                <h2>Example Repository</h2>
+            </div>
+            <div id="examples-grid" class="item-grid scrollable">
+            </div>
+        </section>
+
+        <section id="uploads-section" class="hidden">
+            <div class="section-header">
+                <h2>All Projects</h2>
+                <span class="section-hint">Manage your uploaded point cloud projects</span>
+            </div>
+            <div id="all-uploads-grid" class="item-grid scrollable">
+            </div>
+        </section>
+    </main>
+
+    <!-- New Project Modal — LAS/LAZ only -->
+    <div id="upload-modal" class="modal hidden">
+        <div class="modal-content techno-card">
+            <button class="close-btn" id="modal-close-btn">[ CLOSE ]</button>
+            <h2>Create New Project</h2>
+            <p class="modal-subtitle">Upload a LAS or LAZ point cloud to initialize the project. You can add GIS layers
+                (SHP, KML) from within the 3D viewer after creation.</p>
+
+            <div class="input-group">
+                <label for="project-name-input">Project Name</label>
+                <input type="text" id="project-name-input" placeholder="e.g. My Site Survey" class="techno-input">
+            </div>
+
+            <div class="input-group" id="storage-destination-group" style="display:none">
+                <label>Storage Destination</label>
+                <div class="techno-radio-group">
+                    <label class="radio-label active" id="local-storage-label">
+                        <input type="radio" name="storage-dest" value="local" checked> Local Server
+                    </label>
+                    <label class="radio-label" id="cloud-storage-label">
+                        <input type="radio" name="storage-dest" value="cloud"> Azure Cloud (10GB+ Support)
+                    </label>
+                </div>
+            </div>
+
+            <div id="las-upload-tab" class="tab-content active">
+                <div class="drop-zone techno-border" id="las-drop-zone">
+                    <div class="upload-icon">
+                        <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                            stroke-width="1.5">
+                            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+                            <polyline points="17 8 12 3 7 8" />
+                            <line x1="12" y1="3" x2="12" y2="15" />
+                        </svg>
+                    </div>
+                    <p class="drop-label">Drop LAS / LAZ file here</p>
+                    <p class="drop-sublabel">Supported: .las, .laz</p>
+                    <input type="file" id="las-input" accept=".las,.laz" multiple hidden>
+                    <button class="btn btn-secondary" id="las-browse-btn">Select Point Cloud File</button>
+                </div>
+                <div id="selected-file-name" class="hidden selected-file"></div>
+            </div>
+
+            <div id="upload-progress" class="hidden">
+                <div class="progress-info">
+                    <span id="progress-status">Processing...</span>
+                    <span id="progress-pct">0%</span>
+                </div>
+                <div class="progress-container">
+                    <div class="progress-bar" id="main-progress-bar"></div>
+                </div>
+                <p id="progress-subtext" class="progress-subtext">Converting point cloud — this may take several minutes
+                    for large files.</p>
+            </div>
+        </div>
+    </div>
+
+    <!-- Delete Confirmation Modal -->
+    <div id="delete-modal" class="modal hidden">
+        <div class="modal-content techno-card border-danger">
+            <button class="close-btn" id="delete-close-btn">[ CANCEL ]</button>
+            <h2 class="text-danger">Confirm Deletion</h2>
+            <p class="modal-subtitle">This action is permanent and will delete all point cloud and GIS data for this
+                project.</p>
+
+            <p id="delete-warning-text" style="font-size: 0.9rem; margin-top: 1.5rem;">To confirm, please type the
+                project name: <strong id="delete-target-name"></strong></p>
+
+            <div class="input-group">
+                <input type="text" id="delete-confirm-input" placeholder="Type name here" class="techno-input">
+            </div>
+
+            <button class="btn btn-danger w-full" id="confirm-delete-btn" disabled>Permanently Delete Project</button>
+        </div>
+    </div>
+
+    <script src="app.js"></script>
+</body>
+
+</html>

@@ -70,6 +70,8 @@ export class GeoPackageLoader{
 			if(!transform){
 				transform = {forward: (arg) => arg};
 			}
+			
+			const offset = params.offset || new THREE.Vector3(0, 0, 0);
 
 			const wasmPath = `${Potree.scriptPath}/lazylibs/sql.js/sql-wasm.wasm`;
 			const SQL = await initSqlJs({ locateFile: filename => wasmPath});
@@ -110,8 +112,7 @@ export class GeoPackageLoader{
 				geo.node.add(node);
 
 				for(const [index, feature] of Object.entries(geoJson)){
-					//const featureNode = GeoPackageLoader.featureToSceneNode(feature, matLine, transform);
-					const featureNode = GeoPackageLoader.featureToSceneNode(feature, matLine, dao.projection, transform);
+					const featureNode = GeoPackageLoader.featureToSceneNode(feature, matLine, dao.projection, transform, offset);
 					node.add(featureNode);
 				}
 			}
@@ -122,7 +123,7 @@ export class GeoPackageLoader{
 		return new Promise(resolver);
 	}
 
-	static featureToSceneNode(feature, matLine, geopackageProjection, transform){
+	static featureToSceneNode(feature, matLine, geopackageProjection, transform, offset = new THREE.Vector3(0, 0, 0)){
 		let geometry = feature.geometry;
 		
 		let color = new THREE.Color(1, 1, 1);
@@ -135,7 +136,11 @@ export class GeoPackageLoader{
 			let [long, lat] = geometry.coordinates;
 			let pos = transform.forward(geopackageProjection.forward([long, lat]));
 			
-			s.position.set(...pos, 20);
+			const x = pos[0] - offset.x;
+			const y = pos[1] - offset.y;
+			const z = (pos[2] !== undefined ? pos[2] : 20) - offset.z;
+
+			s.position.set(x, y, z);
 			
 			s.scale.set(10, 10, 10);
 			
@@ -148,13 +153,17 @@ export class GeoPackageLoader{
 				let [long, lat] = geometry.coordinates[i];
 				let pos = transform.forward(geopackageProjection.forward([long, lat]));
 				
-				min.x = Math.min(min.x, pos[0]);
-				min.y = Math.min(min.y, pos[1]);
-				min.z = Math.min(min.z, 20);
+				const x = pos[0] - offset.x;
+				const y = pos[1] - offset.y;
+				const z = (pos[2] !== undefined ? pos[2] : 20) - offset.z;
+
+				min.x = Math.min(min.x, x);
+				min.y = Math.min(min.y, y);
+				min.z = Math.min(min.z, z);
 				
-				coordinates.push(...pos, 20);
+				coordinates.push(x, y, z);
 				if(i > 0 && i < geometry.coordinates.length - 1){
-					coordinates.push(...pos, 20);
+					coordinates.push(x, y, z);
 				}
 			}
 			
@@ -183,13 +192,17 @@ export class GeoPackageLoader{
 					
 					let pos = transform.forward(geopackageProjection.forward([long, lat]));
 					
-					min.x = Math.min(min.x, pos[0]);
-					min.y = Math.min(min.y, pos[1]);
-					min.z = Math.min(min.z, 20);
+					const x = pos[0] - offset.x;
+					const y = pos[1] - offset.y;
+					const z = (pos[2] !== undefined ? pos[2] : 20) - offset.z;
+
+					min.x = Math.min(min.x, x);
+					min.y = Math.min(min.y, y);
+					min.z = Math.min(min.z, z);
 					
-					coordinates.push(...pos, 20);
+					coordinates.push(x, y, z);
 					if(i > 0 && i < pc.length - 1){
-						coordinates.push(...pos, 20);
+						coordinates.push(x, y, z);
 					}
 				}
 				

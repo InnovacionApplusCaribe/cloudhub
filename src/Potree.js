@@ -46,6 +46,7 @@ export * from "./utils/ClippingTool.js";
 export * from "./utils/ClipVolume.js";
 export * from "./utils/GeoTIFF.js";
 export * from "./utils/Measure.js";
+export * from "./utils/GisLayer.js";
 export * from "./utils/MeasuringTool.js";
 export * from "./utils/Message.js";
 export * from "./utils/PointCloudSM.js";

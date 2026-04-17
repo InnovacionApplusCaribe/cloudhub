@@ -1,0 +1,1356 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>Potree Spatial Viewer — CloudHub Caribe</title>
+
+    <link rel="stylesheet" type="text/css" href="/build/potree/potree.css">
+    <link rel="stylesheet" type="text/css" href="/libs/jquery-ui/jquery-ui.min.css">
+    <link rel="stylesheet" type="text/css" href="/libs/openlayers3/ol.css">
+    <link rel="stylesheet" type="text/css" href="/libs/spectrum/spectrum.css">
+    <link rel="stylesheet" type="text/css" href="/libs/jstree/themes/mixed/style.css">
+    <link rel="icon"
+        href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>💠</text></svg>">
+    <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600;700&display=swap" rel="stylesheet">
+
+    <style>
+        :root {
+            --accent: #FF6900;
+            --accent-dim: #CC5400;
+            --bg: #000000;
+            --bg-card: #212121;
+            --border: #E4DEDC;
+            --danger: #ff003c;
+            --font: 'JetBrains Mono', monospace;
+        }
+
+        body {
+            margin: 0;
+            padding: 0;
+            background: var(--bg);
+            font-family: var(--font);
+        }
+
+        /* ── Top bar overlay ─────────────────────────────────── */
+        #viewer-topbar {
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            height: 48px;
+            background: rgba(0, 0, 0, 0.92);
+            border-bottom: 1px solid var(--border);
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 0 16px;
+            z-index: 10001;
+            backdrop-filter: blur(4px);
+        }
+
+        #viewer-topbar .left {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+
+        #viewer-topbar .right {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        #back-btn {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            padding: 6px 14px;
+            background: transparent;
+            color: var(--accent);
+            border: 1px solid var(--accent);
+            text-decoration: none;
+            font-family: var(--font);
+            font-size: 11px;
+            font-weight: 600;
+            letter-spacing: 1px;
+            text-transform: uppercase;
+            transition: all 0.15s;
+        }
+
+        #back-btn:hover {
+            background: var(--accent);
+            color: #000;
+        }
+
+        #viewer-project-name {
+            font-size: 12px;
+            font-weight: 700;
+            color: #fff;
+            opacity: 0.8;
+            max-width: 400px;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+
+        #add-layer-btn {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            padding: 6px 16px;
+            background: var(--accent);
+            color: #000;
+            border: none;
+            cursor: pointer;
+            font-family: var(--font);
+            font-size: 11px;
+            font-weight: 700;
+            letter-spacing: 1px;
+            text-transform: uppercase;
+            transition: all 0.15s;
+        }
+
+        #add-layer-btn:hover {
+            background: #5fff40;
+        }
+
+        #layer-count-badge {
+            display: inline-block;
+            background: rgba(57, 255, 20, 0.12);
+            color: var(--accent);
+            border: 1px solid var(--accent-dim);
+            padding: 2px 8px;
+            font-size: 10px;
+            font-weight: 600;
+        }
+
+        /* ── Viewer container pushed down ─────────────────────── */
+        .potree_container {
+            position: absolute;
+            top: 48px;
+            left: 0;
+            right: 0;
+            bottom: 0;
+        }
+
+        /* ── Potree UI Fixes ──────────────────────────────────── */
+        /* Ensure jQuery UI select menus and tooltips are above the sidebar */
+        .ui-selectmenu-menu,
+        .ui-tooltip,
+        .spectrum-container {
+            z-index: 2000000 !important;
+        }
+
+        #potree_sidebar_container {
+            /* Reduce slightly to be below our forced UI elements but above viewer */
+            z-index: 1000000 !important;
+        }
+
+        /* ── Add Layer Panel ──────────────────────────────────── */
+        #layer-panel {
+            position: absolute;
+            top: 58px;
+            right: 16px;
+            width: 360px;
+            background: rgba(33, 33, 33, 0.97);
+            border: 1px solid var(--accent);
+            box-shadow: 4px 4px 0px var(--accent-dim);
+            z-index: 10002;
+            display: none;
+            backdrop-filter: blur(8px);
+        }
+
+        #layer-panel.open {
+            display: block;
+        }
+
+        .panel-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 12px 16px;
+            border-bottom: 1px solid var(--border);
+        }
+
+        .panel-header h3 {
+            margin: 0;
+            font-size: 12px;
+            font-weight: 700;
+            color: var(--accent);
+            letter-spacing: 1px;
+            text-transform: uppercase;
+        }
+
+        .panel-close {
+            cursor: pointer;
+            color: var(--danger);
+            font-size: 11px;
+            font-weight: 700;
+        }
+
+        .panel-tabs {
+            display: flex;
+            border-bottom: 1px solid var(--border);
+        }
+
+        .panel-tab {
+            flex: 1;
+            padding: 10px;
+            text-align: center;
+            font-size: 11px;
+            font-weight: 600;
+            cursor: pointer;
+            color: #64748b;
+            border: none;
+            background: transparent;
+            font-family: var(--font);
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            border-bottom: 2px solid transparent;
+            transition: all 0.15s;
+        }
+
+        .panel-tab.active {
+            color: var(--accent);
+            border-bottom-color: var(--accent);
+        }
+
+        .panel-tab:hover {
+            color: #fff;
+        }
+
+        .panel-body {
+            padding: 16px;
+        }
+
+        .panel-drop-zone {
+            border: 2px dashed var(--border);
+            padding: 24px 16px;
+            text-align: center;
+            cursor: pointer;
+            transition: all 0.2s;
+            color: #64748b;
+            font-size: 12px;
+        }
+
+        .panel-drop-zone:hover,
+        .panel-drop-zone.drag-over {
+            border-color: var(--accent);
+            background: rgba(57, 255, 20, 0.05);
+            color: var(--accent);
+        }
+
+        .panel-drop-zone .dz-icon {
+            font-size: 28px;
+            margin-bottom: 8px;
+        }
+
+        .panel-drop-zone p {
+            margin: 4px 0;
+        }
+
+        .panel-drop-zone .dz-sub {
+            font-size: 10px;
+            opacity: 0.6;
+        }
+
+        .panel-btn {
+            margin-top: 10px;
+            display: block;
+            width: 100%;
+            padding: 8px;
+            background: transparent;
+            border: 1px solid var(--border);
+            color: #e2e8f0;
+            font-family: var(--font);
+            font-size: 11px;
+            cursor: pointer;
+            transition: all 0.15s;
+        }
+
+        .panel-btn:hover {
+            border-color: var(--accent);
+            color: var(--accent);
+        }
+
+        /* Layer list */
+        #layer-list {
+            list-style: none;
+            padding: 0;
+            margin: 0;
+        }
+
+        #layer-list li {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 8px 16px;
+            font-size: 11px;
+            color: #e2e8f0;
+            border-bottom: 1px solid var(--border);
+        }
+
+        #layer-list li .layer-type {
+            color: var(--accent);
+            font-size: 10px;
+            min-width: 36px;
+        }
+
+        #layer-list li .layer-name {
+            flex: 1;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+
+        #layer-list li .layer-remove {
+            cursor: pointer;
+            color: var(--danger);
+            font-size: 11px;
+        }
+
+        /* Status bar inside panel */
+        #layer-status {
+            padding: 10px 16px;
+            font-size: 11px;
+            color: var(--accent);
+            border-top: 1px solid var(--border);
+            display: none;
+        }
+
+        #layer-progress-bar-container {
+            height: 3px;
+            background: var(--border);
+            margin-top: 6px;
+        }
+
+        #layer-progress-bar {
+            height: 100%;
+            background: var(--accent);
+            width: 0%;
+            transition: width 0.3s;
+        }
+
+        /* Loading overlay */
+        #viewer-loading {
+            position: absolute;
+            top: 48px;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: var(--bg);
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            z-index: 9999;
+            color: var(--accent);
+            font-family: var(--font);
+        }
+
+        #viewer-loading .ld-spinner {
+            width: 40px;
+            height: 40px;
+            border: 3px solid var(--accent-dim);
+            border-top: 3px solid var(--accent);
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+            margin-bottom: 16px;
+        }
+
+        @keyframes spin {
+            from {
+                transform: rotate(0deg);
+            }
+
+            to {
+                transform: rotate(360deg);
+            }
+        }
+
+        #viewer-loading p {
+            font-size: 12px;
+            font-weight: 600;
+            letter-spacing: 1px;
+        }
+
+        #viewer-loading small {
+            font-size: 10px;
+            color: #64748b;
+            margin-top: 4px;
+        }
+
+        /* ── Feature Info Panel ────────────────────────────── */
+        #feature-info-panel {
+            position: absolute;
+            top: 60px;
+            right: 16px;
+            width: 280px;
+            max-height: calc(100vh - 100px);
+            background: rgba(0, 0, 0, 0.85);
+            border: 1px solid var(--accent);
+            z-index: 10000;
+            display: none;
+            flex-direction: column;
+            color: #fff;
+            backdrop-filter: blur(8px);
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
+            font-size: 11px;
+        }
+
+        #feature-info-header {
+            padding: 10px;
+            background: var(--accent);
+            color: #000;
+            font-weight: 700;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        #feature-info-content {
+            padding: 12px;
+            overflow-y: auto;
+        }
+
+        #feature-info-panel table {
+            width: 100%;
+            border-collapse: collapse;
+        }
+
+        #feature-info-panel td {
+            padding: 6px 4px;
+            border-bottom: 1px solid #333;
+        }
+
+        #feature-info-panel .attr-name {
+            color: var(--accent);
+            font-weight: 700;
+            width: 40%;
+        }
+
+        .close-panel {
+            cursor: pointer;
+            font-size: 16px;
+        }
+
+        .layer-item .layer-actions {
+            display: flex;
+            gap: 8px;
+            margin-left: auto;
+        }
+
+        .layer-zoom,
+        .layer-remove {
+            cursor: pointer;
+            opacity: 0.6;
+            transition: opacity 0.2s;
+            font-size: 14px;
+        }
+
+        .layer-zoom:hover,
+        .layer-remove:hover {
+            opacity: 1;
+            color: var(--accent);
+        }
+    </style>
+</head>
+
+<body>
+    <script src="/libs/jquery/jquery-3.1.1.min.js"></script>
+    <script src="/libs/spectrum/spectrum.js"></script>
+    <script src="/libs/jquery-ui/jquery-ui.min.js"></script>
+    <script src="/libs/other/BinaryHeap.js"></script>
+    <script src="/libs/tween/tween.min.js"></script>
+    <script src="/libs/d3/d3.js"></script>
+    <script src="/libs/proj4/proj4.js"></script>
+    <script src="/libs/openlayers3/ol.js"></script>
+    <script src="/libs/i18next/i18next.js"></script>
+    <script src="/libs/jstree/jstree.js"></script>
+    <script src="/build/potree/potree.js"></script>
+    <script src="/libs/plasio/js/laslaz.js"></script>
+    <script src="/libs/shapefile/shapefile.js"></script>
+
+    <!-- Top Bar -->
+    <div id="viewer-topbar">
+        <div class="left">
+            <a href="/" id="back-btn">← Dashboard</a>
+            <span id="viewer-project-name">Loading project...</span>
+        </div>
+        <div class="right">
+            <span id="layer-count-badge">0 layers</span>
+            <button id="add-layer-btn">+ Add Layer</button>
+        </div>
+    </div>
+
+    <!-- Add Layer Panel -->
+    <div id="layer-panel">
+        <div class="panel-header">
+            <h3>Add Data Layer</h3>
+            <span class="panel-close" id="panel-close">✕ Close</span>
+        </div>
+        <div class="panel-tabs">
+            <button class="panel-tab active" data-tab="shp-tab">Shapefile (SHP)</button>
+            <button class="panel-tab" data-tab="kml-tab">KML / KMZ</button>
+            <button class="panel-tab" data-tab="layers-tab">Active Layers</button>
+        </div>
+
+        <!-- SHP tab -->
+        <div class="panel-body" id="shp-tab">
+            <div class="panel-drop-zone" id="shp-drop-zone">
+                <div class="dz-icon">🗺️</div>
+                <p>Drop Shapefile components here</p>
+                <p class="dz-sub">Select all files: .shp, .dbf, .shx, .prj</p>
+                <input type="file" id="shp-layer-input" multiple accept=".shp,.dbf,.shx,.prj" hidden>
+                <button class="panel-btn" id="shp-browse-btn">Select Shapefile Files</button>
+            </div>
+        </div>
+
+        <!-- KML tab -->
+        <div class="panel-body" id="kml-tab" style="display:none">
+            <div class="panel-drop-zone" id="kml-drop-zone">
+                <div class="dz-icon">📍</div>
+                <p>Drop KML or KMZ file here</p>
+                <p class="dz-sub">Supported: .kml, .kmz</p>
+                <input type="file" id="kml-layer-input" accept=".kml,.kmz" hidden>
+                <button class="panel-btn" id="kml-browse-btn">Select KML File</button>
+            </div>
+        </div>
+
+        <!-- Active Layers tab -->
+        <div class="panel-body" id="layers-tab" style="display:none; padding: 0;">
+            <ul id="layer-list">
+                <li style="color:#64748b; padding: 12px 16px; font-size:11px;">No additional layers loaded yet.</li>
+            </ul>
+        </div>
+
+        <div id="layer-status">
+            <span id="layer-status-text">Uploading...</span>
+            <div id="layer-progress-bar-container">
+                <div id="layer-progress-bar"></div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Loading overlay -->
+    <div id="viewer-loading">
+        <div class="ld-spinner"></div>
+        <p>Loading 3D Viewer</p>
+        <small id="loading-detail">Initializing point cloud renderer...</small>
+    </div>
+
+    <!-- Potree Viewer -->
+    <div class="potree_container">
+        <div id="potree_container" style="position: absolute; width: 100%; height: 100%; left: 0px; top: 0px; ">
+            <div id="potree_render_area"></div>
+            <div id="potree_sidebar_container" style="z-index: 1000000 !important;"></div>
+
+            <!-- ── Feature Info Panel ──────────────── -->
+            <div id="feature-info-panel">
+                <div id="feature-info-header">
+                    <span id="feature-info-title">Feature Info</span>
+                    <span class="close-panel"
+                        onclick="document.getElementById('feature-info-panel').style.display='none'">✕</span>
+                </div>
+                <div id="feature-info-content"></div>
+            </div>
+        </div>
+
+        <script>
+            window.onerror = function (msg, url, line, col, error) {
+                document.getElementById('loading-detail').textContent = 'CRASH: ' + msg;
+                document.getElementById('loading-detail').style.color = '#ff4444';
+            };
+            window.addEventListener("unhandledrejection", function (promiseRejectionEvent) {
+                document.getElementById('loading-detail').textContent = 'PROMISE CRASH: ' + promiseRejectionEvent.reason;
+                document.getElementById('loading-detail').style.color = '#ff4444';
+            });
+        </script>
+        <script type="module">
+            import * as THREE from "/libs/three.js/build/three.module.js";
+
+            // ── URL params ─────────────────────────────────────────
+            const urlParams = new URLSearchParams(window.location.search);
+            const loadUrl = urlParams.get('load');
+            const projectId = urlParams.get('projectId') || '';
+
+            // Update project name in top bar
+            const nameEl = document.getElementById('viewer-project-name');
+            if (projectId) {
+                nameEl.textContent = projectId.replace(/_[a-f0-9]{8}$/, '').replace(/_/g, ' ');
+            } else if (loadUrl) {
+                nameEl.textContent = loadUrl.split('/').pop().replace(/\.\w+$/, '');
+            }
+
+            // ── Potree init ────────────────────────────────────────
+            Potree.workerPath = "/build/potree/workers/";
+            window.viewer = new Potree.Viewer(document.getElementById("potree_render_area"));
+            viewer.setEDLEnabled(true);
+            viewer.setFOV(60);
+            viewer.setPointBudget(3_000_000);
+            viewer.loadSettingsFromURL();
+
+            viewer.loadGUI(() => {
+                viewer.setLanguage('en');
+                $("#menu_tools").next().show();
+                $("#menu_scene").next().show();
+                viewer.toggleSidebar();
+
+                // Apply custom classification colors after GUI loads
+                applyCustomClassifications();
+            });
+
+            // ── Custom Classification Colors ──────────────────────
+            function applyCustomClassifications() {
+                const classificationColors = {
+                    // Standard Potree classifications (0-11) preserved
+                    0: new THREE.Vector4(0.5, 0.5, 0.5, 1.0), // Never Classified
+                    1: new THREE.Vector4(0.5, 0.5, 0.5, 1.0), // Unclassified
+                    2: new THREE.Vector4(0.63, 0.32, 0.18, 1.0), // Ground
+                    3: new THREE.Vector4(0.0, 0.5, 0.0, 1.0),  // Low Vegetation
+                    4: new THREE.Vector4(0.0, 0.7, 0.0, 1.0),  // Medium Vegetation
+                    5: new THREE.Vector4(0.0, 1.0, 0.0, 1.0),  // High Vegetation
+                    6: new THREE.Vector4(0.0, 0.0, 1.0, 1.0),  // Building
+                    7: new THREE.Vector4(1.0, 0.0, 1.0, 1.0),  // Low Point
+                    8: new THREE.Vector4(0.5, 0.5, 1.0, 1.0),  // Reserved
+                    9: new THREE.Vector4(0.0, 0.5, 1.0, 1.0),  // Water
+                    10: new THREE.Vector4(0.5, 0.5, 0.5, 1.0), // Rail
+                    11: new THREE.Vector4(0.8, 0.8, 0.0, 1.0), // Road Surface
+                    // Custom classifications
+                    14: new THREE.Vector4(1.0, 1.0, 0.0, 1.0), // Powerline — Yellow
+                    15: new THREE.Vector4(0.0, 0.4, 1.0, 1.0), // Tower — Blue
+                    18: new THREE.Vector4(0.27, 0.27, 0.27, 1.0), // Road — Dark Gray
+                };
+
+                // Inject into Potree classification scheme
+                if (Potree.ClassificationScheme) {
+                    Potree.ClassificationScheme.DEFAULT = classificationColors;
+                }
+
+                // Also inject into any loaded point cloud material
+                const pcs = viewer.scene.pointclouds;
+                pcs.forEach(pc => {
+                    if (pc.material) {
+                        pc.material.classification = classificationColors;
+                        // For Potree 1.8, we might need to trigger a re-render or uniform update
+                        if (pc.material.needsUpdate) pc.material.needsUpdate = true;
+                    }
+                });
+
+                // Update the classification UI sidebar if available
+                try {
+                    // Potree classification sidebar entries
+                    const entries = [
+                        { code: 14, label: 'Powerline', hex: '#ffff00' },
+                        { code: 15, label: 'Tower', hex: '#0066ff' },
+                        { code: 18, label: 'Road', hex: '#444444' },
+                    ];
+                    entries.forEach(entry => {
+                        const row = $(`#classification_${entry.code}`);
+                        if (row.length) {
+                            row.find('.classification-label').text(entry.label);
+                            row.find('.spectrum').spectrum('set', entry.hex);
+                        }
+                    });
+                } catch (e) { /* Sidebar may not be ready yet */ }
+            }
+
+            // ── Load primary data ─────────────────────────────────
+            window.loadedLayers = [];
+
+            async function initViewerData() {
+                if (!loadUrl) {
+                    hideLoading();
+                    return;
+                }
+
+                const isSHP = loadUrl.endsWith('.shp');
+
+                // If it's a shapefile, handle normally
+                if (isSHP) {
+                    document.getElementById('loading-detail').textContent = 'Loading shapefile...';
+                    loadShapefileIntoScene(loadUrl, loadUrl.split('/').pop());
+                    hideLoading();
+                    return;
+                }
+
+                // It's a point cloud project
+                let targetUrl = loadUrl;
+
+                if (loadUrl.endsWith('index.html')) {
+                    const basePath = loadUrl.replace('index.html', '');
+                    document.getElementById('loading-detail').textContent = 'Resolving metadata paths...';
+
+                    // Probe possible locations for point cloud manifestation
+                    const possiblePaths = [
+                        basePath + 'pointclouds/index/metadata.json',
+                        basePath + 'pointclouds/index/cloud.js',
+                        basePath + 'metadata.json',
+                        basePath + 'cloud.js'
+                    ];
+
+                    let found = false;
+                    for (let p of possiblePaths) {
+                        try {
+                            let okRes = await fetch(p, { method: 'HEAD' });
+                            if (okRes.ok) {
+                                targetUrl = p;
+                                found = true;
+                                break;
+                            }
+                        } catch (e) { }
+                    }
+
+                    if (!found) {
+                        console.error("Could not locate any valid metadata.json or cloud.js in project directory.");
+                        document.getElementById('loading-detail').textContent = 'Error: Missing point cloud data.';
+                        return;
+                    }
+                }
+
+                document.getElementById('loading-detail').textContent = 'Rendering 3D scene...';
+                Potree.loadPointCloud(targetUrl, "Point Cloud", e => {
+                    const pc = e.pointcloud;
+                    const mat = pc.material;
+                    viewer.scene.addPointCloud(pc);
+                    mat.pointSizeType = Potree.PointSizeType.ADAPTIVE;
+                    mat.size = 1;
+                    viewer.fitToScreen();
+                    hideLoading();
+                    applyCustomClassifications();
+
+                    // Load persistent layers AFTER point cloud (for projection context)
+                    loadProjectLayers();
+                });
+            }
+
+            async function loadProjectLayers() {
+                if (!projectId) return;
+                try {
+                    const res = await fetch(`/api/project-layers/${encodeURIComponent(projectId)}`, { cache: 'no-store' });
+                    if (!res.ok) { console.warn('[Layers] No manifest found for', projectId); return; }
+
+                    const layers = await res.json();
+                    if (!layers.length) return;
+
+                    console.log(`[Layers] Found ${layers.length} layer(s) for project:`, projectId);
+
+                    for (const layer of layers) {
+                        // Verify file exists before attempting load
+                        try {
+                            const check = await fetch(layer.url, { method: 'HEAD', cache: 'no-store' });
+                            if (!check.ok) {
+                                console.warn(`[Layers] Skipping missing layer: ${layer.url}`);
+                                continue;
+                            }
+                        } catch (e) {
+                            console.warn('[Layers] Failed to probe layer URL:', layer.url);
+                            continue;
+                        }
+
+                        console.log(`[Layers] Auto-loading ${layer.type}:`, layer.name);
+                        if (layer.type === 'SHP') {
+                            await loadShapefileIntoScene(layer.url, layer.name);
+                        } else if (layer.type === 'KML') {
+                            try {
+                                const kmlRes = await fetch(layer.url);
+                                const kmlText = await kmlRes.text();
+                                await loadKMLIntoScene(kmlText, layer.name);
+                            } catch (err) { console.error('[Layers] KML auto-load failed', err); }
+                        }
+                    }
+                } catch (e) { console.error('[Layers] Error loading project layers:', e); }
+            }
+
+            initViewerData();
+
+            function hideLoading() {
+                setTimeout(() => {
+                    const overlay = document.getElementById('viewer-loading');
+                    if (overlay) overlay.style.display = 'none';
+                }, 1200);
+            }
+
+            // ── Optimized SHP loader ─────────────────────────────
+            async function loadShapefileIntoScene(url, label) {
+                try {
+                    const loader = new Potree.ShapefileLoader();
+                    const pc = viewer.scene.pointclouds[0];
+                    if (!pc) throw new Error("Load a point cloud first to provide coordinate context.");
+
+                    const offset = pc.pcoGeometry ? pc.pcoGeometry.offset : new THREE.Vector3(0, 0, 0);
+                    const pcProj = pc.projection || "";
+                    const groundZ = pc.tightBoundingBox ? pc.tightBoundingBox.min.z : offset.z;
+
+                    // Read .prj for CRS info
+                    let shpCRS = null;
+                    try {
+                        const prjUrl = url.replace(/\.shp$/i, '.prj');
+                        const prjRes = await fetch(prjUrl);
+                        if (prjRes.ok) shpCRS = await prjRes.text();
+                    } catch (e) { }
+
+                    const isWGS84 = !shpCRS || shpCRS.includes('GEOGCS["GCS_WGS_1984"') || shpCRS.includes('WGS 84');
+
+                    // ━━━ SINGLE TRANSFORMATION FUNCTION ━━━
+                    // This is the ONLY place where coordinates are transformed
+                    // It handles: CRS projection AND offset adjustment in one pass
+                    const transformArray = (coord) => {
+                        let [x, y, z] = coord;
+                        let targetX = x, targetY = y, targetZ = (z !== undefined && z !== null) ? z : groundZ;
+
+                        // 1. Apply CRS projection if needed
+                        if (isWGS84 && pcProj) {
+                            proj4.defs("WGS84", "+proj=longlat +datum=WGS84 +no_defs");
+                            proj4.defs("pointcloud", pcProj);
+                            const p = proj4("WGS84", "pointcloud", [x, y]);
+                            targetX = p[0]; targetY = p[1];
+                        }
+
+                        // 2. Subtract offset to get to local scene space
+                        return [targetX - offset.x, targetY - offset.y, targetZ - offset.z];
+                    };
+
+                    // Set the loader's transform - this is applied INSIDE the loader
+                    loader.transform = { forward: transformArray };
+                    loader.defaultZ = groundZ;  // For 2D features without Z
+                    
+                    const shp = await loader.load(url);
+                    if (!shp.features?.length) throw new Error("No features found in shapefile");
+
+                    const layerGroup = new THREE.Group();
+                    layerGroup.name = `Layer: ${label}`;
+                    
+                    // ━━━ USE THE LOADER'S PROCESSED NODE DIRECTLY ━━━
+                    // The loader has already applied ALL transformations
+                    // We just add its geometries to our layer group
+                    if (shp.node && shp.node.children && shp.node.children.length > 0) {
+                        shp.node.children.forEach(child => {
+                            layerGroup.add(child);
+                        });
+                    }
+
+                    const maxFeatures = shp.features.length;
+                    console.log(`[Layers] Loaded ${maxFeatures} features for ${label}`);
+
+                    // Add to scene
+                    viewer.scene.scene.add(layerGroup);
+
+                    // ━━━ LAYER MEASUREMENT WRAPPER ━━━
+                    const layerMeasure = new Potree.Measure();
+                    layerMeasure.name = label;
+                    layerMeasure.showDistances = false;
+                    layerMeasure.showAngles = false;
+                    layerMeasure.showCoordinates = false;
+                    layerMeasure.showArea = false;
+                    layerMeasure.closed = false;
+                    layerMeasure.add(layerGroup);
+                    viewer.scene.addMeasurement(layerMeasure);
+
+                    window.loadedLayers.push({ type: 'SHP', label, node: layerMeasure, visual: layerGroup });
+                    updateLayerBadge();
+
+                    // Viewport zoom to first layer
+                    if (window.loadedLayers.length === 1 && layerGroup.children.length) {
+                        const box = new THREE.Box3().setFromObject(layerGroup);
+                        if (!box.isEmpty()) {
+                            viewer.scene.view.lookAt(box.getCenter(new THREE.Vector3()));
+                        }
+                    }
+                    
+                    console.log(`[Layers] Successfully added ${label} to scene`);
+                    return true;
+                } catch (e) {
+                    console.error('SHP load error:', e);
+                    showLayerError(e.message);
+                    return false;
+                }
+            }
+
+            function renderAttributeTable(props) {
+                let html = '<table style="font-size: 0.8em; border-collapse: collapse; width: 100%; color: #eee;">';
+                for (let k in props) {
+                    html += `<tr style="border-bottom: 1px solid #444"><td style="padding:2px; font-weight:bold; color:var(--accent)">${k}</td><td style="padding:2px">${props[k]}</td></tr>`;
+                }
+                return html + '</table>';
+            }
+
+            // ── Optimized KML loader ───────────────────────────────
+            async function loadKMLIntoScene(text, label) {
+                try {
+                    const parser = new DOMParser();
+                    const doc = parser.parseFromString(text, 'text/xml');
+                    const placemarks = doc.querySelectorAll('Placemark');
+
+                    const pc = viewer.scene.pointclouds[0];
+                    if (!pc) throw new Error("Load a point cloud first to provide coordinate context.");
+
+                    const offset = pc.pcoGeometry ? pc.pcoGeometry.offset : new THREE.Vector3(0, 0, 0);
+                    const pcProj = pc.projection || "";
+                    const groundZ = pc.tightBoundingBox ? pc.tightBoundingBox.min.z : offset.z;
+
+                    // Transformer for KML (Lon/Lat)
+                    const transform = (coord) => {
+                        let [lon, lat, alt] = coord;
+                        let targetX = lon, targetY = lat, targetZ = alt !== undefined ? alt : (groundZ + offset.z);
+
+                        if (pcProj) {
+                            proj4.defs("WGS84", "+proj=longlat +datum=WGS84 +no_defs");
+                            proj4.defs("pointcloud", pcProj);
+                            const p = proj4("WGS84", "pointcloud", [lon, lat]);
+                            targetX = p[0]; targetY = p[1];
+                        }
+
+                        return new THREE.Vector3(targetX - offset.x, targetY - offset.y, targetZ - offset.z);
+                    };
+
+                    const layerGroup = new THREE.Group();
+                    layerGroup.name = `KML: ${label}`;
+                    viewer.scene.scene.add(layerGroup);
+
+                    // Determine an anchor for the KML root folder
+                    let anchorPos = [0, 0, 0];
+                    if (placemarks.length > 0) {
+                        const firstCoordEl = placemarks[0].querySelector('coordinates');
+                        if (firstCoordEl) {
+                            const raw = firstCoordEl.textContent.trim().split(/\s+/)[0].split(',');
+                            if (raw.length >= 2) {
+                                anchorPos = transform([parseFloat(raw[0]), parseFloat(raw[1]), raw[2] ? parseFloat(raw[2]) : undefined]);
+                            }
+                        }
+                    }
+
+                    const lineColor = 0x00BFFF;
+                    const pointColor = 0x00BFFF;
+                    const maxAnnos = 500;
+
+                    let lineVertices = [];
+                    let lineFeatureIndices = [];
+                    let pointVertices = [];
+                    let pointFeatureIndices = [];
+                    let kmlFeatures = [];
+
+                    placemarks.forEach((pm, featureIdx) => {
+                        const name = pm.querySelector('name')?.textContent || 'Unnamed';
+                        const desc = pm.querySelector('description')?.textContent || '';
+                        const props = { name, description: desc };
+                        kmlFeatures.push(props);
+
+                        // 1. Create Annotation (Limit)
+                        if (featureIdx < maxAnnos) {
+                            let annoPos = null;
+                            const firstPt = pm.querySelector('Point coordinates');
+                            const firstLine = pm.querySelector('LineString coordinates');
+
+                            if (firstPt) {
+                                const raw = firstPt.textContent.trim().split(',');
+                                if (raw.length >= 2) annoPos = transform([parseFloat(raw[0]), parseFloat(raw[1]), raw[2] ? parseFloat(raw[2]) : undefined]);
+                            } else if (firstLine) {
+                                const firstCoord = firstLine.textContent.trim().split(/\s+/)[0].split(',');
+                                if (firstCoord.length >= 2) annoPos = transform([parseFloat(firstCoord[0]), parseFloat(firstCoord[1]), firstCoord[2] ? parseFloat(firstCoord[2]) : undefined]);
+                            }
+                        }
+
+                        // 2. Prepare Batched Geometry
+                        // Points
+                        pm.querySelectorAll('Point coordinates').forEach(cEl => {
+                            const raw = cEl.textContent.trim().split(',');
+                            if (raw.length < 2) return;
+                            const localPos = transform([parseFloat(raw[0]), parseFloat(raw[1]), raw[2] ? parseFloat(raw[2]) : undefined]);
+                            pointVertices.push(localPos);
+                            pointFeatureIndices.push(featureIdx);
+                        });
+
+                        // Lines
+                        pm.querySelectorAll('LineString coordinates').forEach(cEl => {
+                            const coords = cEl.textContent.trim().split(/\s+/).map(s => {
+                                const p = s.split(',');
+                                return transform([parseFloat(p[0]), parseFloat(p[1]), p[2] ? parseFloat(p[2]) : undefined]);
+                            });
+
+                            if (coords.length > 1) {
+                                for (let j = 0; j < coords.length - 1; j++) {
+                                    lineVertices.push(coords[j], coords[j + 1]);
+                                    lineFeatureIndices.push(featureIdx, featureIdx);
+                                }
+                            }
+                        });
+                    });
+
+                    // Finalize Visual Objects with Enhanced Visualization
+
+                    // ━━━ CREATE POINT MARKERS (3D Spheres like Measurements tool) ━━━
+                    if (pointVertices.length > 0) {
+                        const pointGroup = new THREE.Group();
+                        pointGroup.name = "KML Points";
+                        
+                        const sphereGeometry = new THREE.SphereGeometry(0.8, 12, 12);
+                        const pointMat = new THREE.MeshLambertMaterial({ 
+                            color: pointColor, 
+                            depthTest: false,
+                            depthWrite: false
+                        });
+                        
+                        // Create individual sphere for each point
+                        pointVertices.forEach((pos, idx) => {
+                            const sphere = new THREE.Mesh(sphereGeometry, pointMat);
+                            sphere.position.copy(pos);
+                            sphere.userData = { 
+                                featureIndex: pointFeatureIndices[idx],
+                                layerLabel: label
+                            };
+                            pointGroup.add(sphere);
+                        });
+                        
+                        pointGroup.userData = { features: kmlFeatures, featureIndices: pointFeatureIndices, layerLabel: label };
+                        pointGroup.isGISLayer = true;
+                        layerGroup.add(pointGroup);
+                    }
+
+                    // ━━━ CREATE LINES WITH ENHANCED STYLING ━━━
+                    if (lineVertices.length > 0) {
+                        const lineGeom = new THREE.BufferGeometry().setFromPoints(lineVertices);
+                        lineGeom.computeBoundingSphere();
+                        lineGeom.computeBoundingBox();
+                        
+                        const lineMat = new THREE.LineBasicMaterial({ 
+                            color: lineColor, 
+                            linewidth: 2,
+                            depthTest: false,
+                            depthWrite: false,
+                            transparent: true,
+                            opacity: 0.95
+                        });
+                        
+                        const lineObj = new THREE.LineSegments(lineGeom, lineMat);
+                        lineObj.frustumCulled = false;
+                        lineObj.userData = { features: kmlFeatures, featureIndices: lineFeatureIndices, layerLabel: label };
+                        lineObj.isGISLayer = true;
+                        layerGroup.add(lineObj);
+                    }
+
+                    // --- Correct Format: Using Potree.Measure as the Layer Container ---
+                    const layerMeasure = new Potree.Measure();
+                    layerMeasure.name = label;
+                    layerMeasure.showDistances = false;
+                    layerMeasure.showAngles = false;
+                    layerMeasure.showCoordinates = false;
+                    layerMeasure.showArea = false;
+                    layerMeasure.closed = false;
+
+                    // Add the batched visual group to the measure object
+                    layerMeasure.add(layerGroup);
+                    viewer.scene.addMeasurement(layerMeasure);
+
+                    window.loadedLayers.push({ type: 'KML', label, node: layerMeasure, visual: layerGroup });
+                    updateLayerBadge();
+                    return true;
+                } catch (e) {
+                    console.error('KML load error:', e);
+                    showLayerError(e.message);
+                    return false;
+                }
+            }
+
+            // ── Layer UI helpers ──────────────────────────────────
+            function updateLayerBadge() {
+                const badge = document.getElementById('layer-count-badge');
+                const n = window.loadedLayers.length;
+                badge.textContent = n + (n === 1 ? ' layer' : ' layers');
+            }
+
+            function addLayerToList(type, label, node) {
+                const list = document.getElementById('layer-list');
+                // Remove placeholder
+                list.querySelectorAll('li[data-placeholder]').forEach(li => li.remove());
+
+                const li = document.createElement('li');
+                li.innerHTML = `
+                <span class="layer-type">${type}</span>
+                <span class="layer-name" title="${label}">${label}</span>
+                <div class="layer-actions">
+                    <span class="layer-zoom" title="Zoom to layer">🔍</span>
+                    <span class="layer-remove" title="Remove layer">✕</span>
+                </div>`;
+
+                li.querySelector('.layer-zoom').onclick = () => {
+                    const layer = window.loadedLayers.find(ll => ll.node === node);
+                    if (layer && layer.visual) {
+                        const box = new THREE.Box3().setFromObject(layer.visual);
+                        if (!box.isEmpty()) {
+                            viewer.scene.view.lookAt(box.getCenter(new THREE.Vector3()));
+                            // Also try to zoom closer
+                            const size = box.getSize(new THREE.Vector3()).length();
+                            viewer.scene.view.radius = size * 1.2;
+                        }
+                    }
+                };
+
+                li.querySelector('.layer-remove').onclick = () => {
+                    if (node instanceof Potree.Measure) {
+                        viewer.scene.removeMeasurement(node);
+                    } else if (node) {
+                        viewer.scene.scene.remove(node);
+                    }
+
+                    const l = window.loadedLayers.find(ll => ll.node === node);
+                    if (l && l.visual) viewer.scene.scene.remove(l.visual);
+                    window.loadedLayers = window.loadedLayers.filter(ll => ll.node !== node);
+                    li.remove();
+                    updateLayerBadge();
+                    if (!list.children.length) {
+                        const ph = document.createElement('li');
+                        ph.dataset.placeholder = '1';
+                        ph.style.cssText = 'color:#64748b;padding:12px 16px;font-size:11px';
+                        ph.textContent = 'No additional layers loaded yet.';
+                        list.appendChild(ph);
+                    }
+                };
+                list.appendChild(li);
+            }
+
+            function showLayerStatus(msg) {
+                const bar = document.getElementById('layer-status');
+                document.getElementById('layer-status-text').textContent = msg;
+                bar.style.display = 'block';
+                const pb = document.getElementById('layer-progress-bar');
+                pb.style.width = '0%';
+                let w = 0;
+                const interval = setInterval(() => {
+                    w = Math.min(w + 8, 90); pb.style.width = w + '%';
+                    if (w >= 90) clearInterval(interval);
+                }, 150);
+                return interval;
+            }
+
+            function finishLayerStatus(interval, success) {
+                clearInterval(interval);
+                document.getElementById('layer-progress-bar').style.width = '100%';
+                document.getElementById('layer-status-text').textContent = success
+                    ? '✓ Layer loaded successfully'
+                    : '✗ Failed to load layer';
+                setTimeout(() => {
+                    document.getElementById('layer-status').style.display = 'none';
+                    document.getElementById('layer-progress-bar').style.width = '0%';
+                }, 2500);
+            }
+
+            function showLayerError(msg) {
+                const s = document.getElementById('layer-status');
+                document.getElementById('layer-status-text').textContent = '✗ ' + msg;
+                document.getElementById('layer-status-text').style.color = '#ff003c';
+                s.style.display = 'block';
+                setTimeout(() => { s.style.display = 'none'; }, 4000);
+            }
+
+            // ── Upload a layer to server, then load into scene ────
+            async function uploadAndLoadLayer(files, type) {
+                console.log(`Starting ${type} upload for project: ${projectId}`);
+                if (!projectId) {
+                    console.warn("No projectId found in URL, using 'standalone'");
+                }
+
+                const interval = showLayerStatus(`Uploading ${files.length} file(s)...`);
+                const formData = new FormData();
+                formData.append('projectId', projectId || 'standalone');
+
+                // Append all files and check for SHP components
+                let hasSHP = false, hasDBF = false, hasSHX = false;
+                for (let i = 0; i < files.length; i++) {
+                    const name = files[i].name.toLowerCase();
+                    if (name.endsWith('.shp')) hasSHP = true;
+                    if (name.endsWith('.dbf')) hasDBF = true;
+                    if (name.endsWith('.shx')) hasSHX = true;
+                    formData.append('files', files[i]);
+                }
+
+                if (type === 'SHP' && (!hasSHP || !hasDBF || !hasSHX)) {
+                    const missing = [];
+                    if (!hasSHP) missing.push('.shp');
+                    if (!hasDBF) missing.push('.dbf');
+                    if (!hasSHX) missing.push('.shx');
+                    const msg = `Missing required Shapefile components: ${missing.join(', ')}. Please select all files together.`;
+                    alert(msg);
+                    showLayerError(msg);
+                    return;
+                }
+
+                try {
+                    const res = await fetch('/api/upload-layer', {
+                        method: 'POST',
+                        body: formData
+                    });
+
+                    if (!res.ok) {
+                        let errorText = await res.text();
+                        try {
+                            const errJson = JSON.parse(errorText);
+                            errorText = errJson.error || errorText;
+                        } catch (e) { }
+                        console.error('Server upload failed:', errorText);
+                        throw new Error(errorText || 'Upload failed');
+                    }
+
+                    const result = await res.json();
+                    console.log('Upload result:', result);
+
+                    document.getElementById('layer-status-text').textContent = 'Loading into scene...';
+
+                    let ok = false;
+                    if (result.primaryUrl) {
+                        if (type === 'SHP') {
+                            // Strip the .shp extension for a cleaner layer label in the sidebar
+                            const shpLabel = result.primaryUrl.split('/').pop().replace(/\.shp$/i, '');
+                            console.log('Loading Shapefile:', result.primaryUrl, '→ label:', shpLabel);
+                            try {
+                                ok = await loadShapefileIntoScene(result.primaryUrl, shpLabel);
+                            } catch (shpErr) {
+                                console.error('[SHP] loadShapefileIntoScene threw:', shpErr);
+                                throw new Error('Shapefile parse error: ' + shpErr.message);
+                            }
+                        } else if (type === 'KML') {
+                            const kmlLabel = result.primaryUrl.split('/').pop().replace(/\.kml$/i, '');
+                            console.log('Loading KML:', result.primaryUrl, '→ label:', kmlLabel);
+                            const kmlRes = await fetch(result.primaryUrl);
+                            const kmlText = await kmlRes.text();
+                            ok = await loadKMLIntoScene(kmlText, kmlLabel);
+                        }
+                    } else {
+                        console.error('No primary file (.shp or .kml) found in server response');
+                        throw new Error('No valid entry file found in upload');
+                    }
+
+                    finishLayerStatus(interval, ok);
+                } catch (e) {
+                    console.error('Layer upload/load error:', e);
+                    finishLayerStatus(interval, false);
+                    alert(`Error: ${e.message}`);
+                    showLayerError(e.message);
+                }
+            }
+
+            // ── Panel controls ─────────────────────────────────────
+            const addLayerBtn = document.getElementById('add-layer-btn');
+            const layerPanel = document.getElementById('layer-panel');
+            const panelClose = document.getElementById('panel-close');
+
+            addLayerBtn.onclick = () => layerPanel.classList.toggle('open');
+            panelClose.onclick = () => layerPanel.classList.remove('open');
+
+            // Tab switching in panel
+            document.querySelectorAll('.panel-tab').forEach(tab => {
+                tab.onclick = () => {
+                    document.querySelectorAll('.panel-tab').forEach(t => t.classList.remove('active'));
+                    tab.classList.add('active');
+                    ['shp-tab', 'kml-tab', 'layers-tab'].forEach(id => {
+                        document.getElementById(id).style.display = 'none';
+                    });
+                    document.getElementById(tab.dataset.tab).style.display = 'block';
+                };
+            });
+
+            // SHP upload
+            const shpInput = document.getElementById('shp-layer-input');
+            const shpDZ = document.getElementById('shp-drop-zone');
+            document.getElementById('shp-browse-btn').onclick = (e) => { e.stopPropagation(); shpInput.click(); };
+            shpDZ.onclick = () => shpInput.click();
+            shpDZ.addEventListener('dragover', (e) => { e.preventDefault(); shpDZ.classList.add('drag-over'); });
+            shpDZ.addEventListener('dragleave', () => shpDZ.classList.remove('drag-over'));
+            shpDZ.addEventListener('drop', (e) => {
+                e.preventDefault(); shpDZ.classList.remove('drag-over');
+                if (e.dataTransfer.files.length) uploadAndLoadLayer(e.dataTransfer.files, 'SHP');
+            });
+            shpInput.onchange = (e) => { if (e.target.files.length) uploadAndLoadLayer(e.target.files, 'SHP'); };
+
+            // KML upload
+            const kmlInput = document.getElementById('kml-layer-input');
+            const kmlDZ = document.getElementById('kml-drop-zone');
+            document.getElementById('kml-browse-btn').onclick = (e) => { e.stopPropagation(); kmlInput.click(); };
+            kmlDZ.onclick = () => kmlInput.click();
+            kmlDZ.addEventListener('dragover', (e) => { e.preventDefault(); kmlDZ.classList.add('drag-over'); });
+            kmlDZ.addEventListener('dragleave', () => kmlDZ.classList.remove('drag-over'));
+            kmlDZ.addEventListener('drop', (e) => {
+                e.preventDefault(); kmlDZ.classList.remove('drag-over');
+                if (e.dataTransfer.files.length) uploadAndLoadLayer(e.dataTransfer.files, 'KML');
+            });
+            // ── Interaction: Click GIS objects to show info ───────
+            const raycaster = new THREE.Raycaster();
+            raycaster.params.Line.threshold = 0.1;
+            raycaster.params.Points.threshold = 0.2;
+
+            const onViewerClick = (event) => {
+                const rect = viewer.renderer.domElement.getBoundingClientRect();
+                const mouse = new THREE.Vector2(
+                    ((event.clientX - rect.left) / rect.width) * 2 - 1,
+                    -((event.clientY - rect.top) / rect.height) * 2 + 1
+                );
+
+                const activeCamera = viewer.scene ? viewer.scene.getActiveCamera() : null;
+                if (!activeCamera) return;
+                raycaster.setFromCamera(mouse, activeCamera);
+
+                const targets = window.loadedLayers.map(l => l.visual).filter(v => v);
+                const intersects = raycaster.intersectObjects(targets, true);
+
+                if (intersects.length > 0) {
+                    const hit = intersects[0];
+                    const obj = hit.object;
+
+                    // --- Batched GIS Selection Logic ---
+                    if (obj.isGISLayer && obj.userData.featureIndices) {
+                        const vertexIdx = hit.index;
+                        const featureIdx = obj.userData.featureIndices[vertexIdx];
+                        const features = obj.userData.features;
+                        const feature = features[featureIdx];
+
+                        if (feature) {
+                            const panel = document.getElementById('feature-info-panel');
+                            const content = document.getElementById('feature-info-content');
+                            const title = document.getElementById('feature-info-title');
+
+                            const props = feature.properties || feature; // Handle SHP vs KML
+                            const name = props.name || props.NAME || props.Name || props.id || props.ID || "Feature Detail";
+
+                            title.textContent = name;
+                            let tableHtml = '<table>';
+                            for (let key in props) {
+                                if (typeof props[key] === 'object') continue;
+                                tableHtml += `<tr><td class="attr-name">${key}</td><td>${props[key]}</td></tr>`;
+                            }
+                            tableHtml += '</table>';
+                            content.innerHTML = tableHtml;
+                            panel.style.display = 'flex';
+
+                            // Highlight Effect
+                            if (obj.isGISLayer) {
+                                const oldColor = obj.material.color.getHex();
+                                obj.material.color.setHex(0xFFFF00);
+                                setTimeout(() => { if (obj.material) obj.material.color.setHex(oldColor); }, 800);
+                            }
+                        }
+                    } else if (obj.annotation) {
+                        // Handle individual objects if they exist
+                        const anno = obj.annotation;
+
+                        // 3. Highlight Effect (Temporary)
+                        if (obj.material && obj.material.color) {
+                            const oldColor = obj.material.color.getHex();
+                            obj.material.color.setHex(0xFFFF00);
+                            setTimeout(() => {
+                                if (obj.material && obj.material.color) obj.material.color.setHex(oldColor);
+                            }, 2000);
+                        }
+                    }
+                }
+            };
+
+            viewer.renderer.domElement.addEventListener('click', onViewerClick);
+
+            kmlInput.onchange = (e) => { if (e.target.files.length) uploadAndLoadLayer(e.target.files, 'KML'); };
+
+        </script>
+</body>
+
+</html>

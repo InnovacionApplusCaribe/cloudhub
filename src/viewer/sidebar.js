@@ -481,6 +481,31 @@ export class Sidebar{
 					node.boundingBox = box;
 					this.viewer.zoomTo(node, 1, 500);
 				}
+			}else if(object.type === "GisFeature"){
+				let geom = object.feature.geometry;
+				if(geom) {
+					let box = new THREE.Box3();
+					if(geom.type === "Point"){
+						let p = new THREE.Vector3(...geom.coordinates);
+						box.expandByPoint(p);
+						box.expandByScalar(15); 
+					} else if (geom.type === "LineString") {
+						for(let c of geom.coordinates) {
+							box.expandByPoint(new THREE.Vector3(...c));
+						}
+					} else if (geom.type === "Polygon" || geom.type === "MultiPolygon") {
+						let rings = geom.type === "Polygon" ? geom.coordinates : geom.coordinates.flat();
+						for(let ring of rings) {
+							for(let c of ring) {
+								box.expandByPoint(new THREE.Vector3(...c));
+							}
+						}
+					}
+					
+					let targetNode = new THREE.Object3D();
+					targetNode.boundingBox = box;
+					this.viewer.zoomTo(targetNode, 1, 500);
+				}
 			}else if(object instanceof Annotation){
 				object.moveHere(this.viewer.scene.getActiveCamera());
 			}else if(object instanceof PolygonClipVolume){
@@ -567,7 +592,30 @@ export class Sidebar{
 		let onMeasurementAdded = (e) => {
 			let measurement = e.measurement;
 			let icon = Utils.getMeasurementIcon(measurement);
-			createNode(measurementID, measurement.name, icon, measurement);
+			if (measurement.type === "GisLayer") {
+				icon = `${Potree.resourcePath}/icons/triangle.svg`;
+			}
+			let nodeID = createNode(measurementID, measurement.name, icon, measurement);
+
+			if (measurement.type === "GisLayer" && measurement.features) {
+				const featureToNodeId = new Map();
+				for (const gisFeature of measurement.features) {
+					let fIcon = `${Potree.resourcePath}/icons/triangle.svg`;
+					if (gisFeature.feature.geometry && gisFeature.feature.geometry.type === "Point") {
+						fIcon = `${Potree.resourcePath}/icons/point.svg`;
+					}
+					let fNodeId = createNode(nodeID, gisFeature.name, fIcon, gisFeature);
+					featureToNodeId.set(gisFeature, fNodeId);
+				}
+
+				measurement.addEventListener('gis_feature_selected', (event) => {
+					let fNodeId = featureToNodeId.get(event.feature);
+					if (fNodeId) {
+						tree.jstree('deselect_all');
+						tree.jstree('select_node', fNodeId);
+					}
+				});
+			}
 		};
 
 		let onVolumeAdded = (e) => {
