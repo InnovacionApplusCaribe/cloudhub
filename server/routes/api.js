@@ -48,6 +48,42 @@ router.get('/config', (req, res) => {
     });
 });
 
+router.get('/health', (req, res) => {
+    const health = {
+        status: 'ok',
+        nodeVersion: process.version,
+        platform: process.platform,
+        uptime: process.uptime(),
+        environment: {
+            nodeEnv: process.env.NODE_ENV,
+            isAzureAppService: !!process.env.WEBSITE_INSTANCE_ID
+        },
+        azure: {
+            enabled: config.azure.isCloudEnabled,
+            appService: config.azure.isAzureAppService,
+            connectionStringConfigured: !!process.env.AZURE_STORAGE_CONNECTION_STRING,
+            clientInitialized: !!config.azure.blobServiceClient,
+            accountName: config.azure.accountName || 'N/A'
+        },
+        converter: {
+            path: config.potreeConverterPath,
+            exists: fs.existsSync(config.potreeConverterPath),
+            platform: process.platform
+        },
+        storage: {
+            uploadsDir: config.uploadsDir,
+            uploadsExists: fs.existsSync(config.uploadsDir),
+            convertedDir: config.convertedDir,
+            convertedExists: fs.existsSync(config.convertedDir),
+            tempCloudDir: config.tempCloudDir,
+            tempCloudExists: fs.existsSync(config.tempCloudDir)
+        },
+        activeJobs: jobs.size,
+        timestamp: new Date().toISOString()
+    };
+    res.json(health);
+});
+
 router.post('/upload', (req, res, next) => {
     upload.array('file', 500)(req, res, (err) => {
         if (err) {

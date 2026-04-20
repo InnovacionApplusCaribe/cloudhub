@@ -16,7 +16,7 @@ if (process.env.POTREE_CONVERTER_PATH) {
     const envPath = process.env.POTREE_CONVERTER_PATH;
     // Check if env path is a directory or already a full path to binary
     const stats = fs.existsSync(envPath) ? fs.statSync(envPath) : null;
-    
+
     if (stats && stats.isDirectory()) {
         // User provided directory - append correct binary based on platform
         potreeConverterPath = isWin
@@ -47,7 +47,7 @@ const config = {
         convertedContainer: process.env.AZURE_CONVERTED_CONTAINER_NAME || 'converted-potree',
         uploadsContainer: process.env.AZURE_UPLOADS_TEMP_CONTAINER_NAME || 'uploads-temp',
         accountName: null,
-        isCloudEnabled: true,
+        isCloudEnabled: false, // Default to false until successfully instantiated
         isAzureAppService: isAzureAppService,
         blobServiceClient: null
     }
@@ -67,7 +67,11 @@ if (config.azure.connectionString) {
             console.log('✓ Running on Azure App Service');
         }
     } catch (err) {
-        console.warn('⚠ Azure Blob Storage connection failed:', err.message);
+        config.azure.isCloudEnabled = false;
+        console.warn('⚠ Azure Blob Storage connection failed! Please check if the AZURE_STORAGE_CONNECTION_STRING env var is valid:');
+        console.warn('  Error message:', err.message);
+        const maskedStr = (config.azure.connectionString || '').substring(0, 20) + '...';
+        console.warn(`  Attempted connection string prefix: "${maskedStr}"`);
         console.warn('  Falling back to local storage only');
     }
 } else if (config.azure.isAzureAppService) {

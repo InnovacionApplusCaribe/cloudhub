@@ -7,6 +7,9 @@ const { v4: uuidv4 } = require('uuid');
 const azureStorage = {
     async getUploadSas(fileName) {
         if (!config.azure.isCloudEnabled) throw new Error('Cloud storage not enabled');
+        if (!config.azure.blobServiceClient) {
+            throw new Error('Azure Blob Storage client not initialized. Please check AZURE_STORAGE_CONNECTION_STRING environment variable.');
+        }
 
         const blobName = `${uuidv4()}-${fileName}`;
         const containerClient = config.azure.blobServiceClient.getContainerClient(config.azure.rawContainer);
