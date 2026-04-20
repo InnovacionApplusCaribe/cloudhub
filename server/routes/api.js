@@ -143,8 +143,8 @@ router.post('/upload', (req, res, next) => {
             job.progress = data === 0 ? 100 : 0;
             if (data !== 0) job.error = `Exit code ${data}`;
 
-            // If on Azure and conversion succeeded, upload to blob storage
-            if (data === 0 && config.azure.isCloudEnabled && config.azure.isAzureAppService) {
+            // If cloud enabled and conversion succeeded, upload to blob storage
+            if (data === 0 && config.azure.isCloudEnabled) {
                 try {
                     console.log(`[Job ${jobId}] Starting cloud upload to Azure Blob Storage...`);
                     const cloudUrl = await blobUploader.uploadConvertedProject(
