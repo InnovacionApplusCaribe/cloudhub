@@ -20,6 +20,8 @@ const converter = {
         console.log(`Executing: ${config.potreeConverterPath} ${args.join(' ')}`);
 
         const process = spawn(config.potreeConverterPath, args);
+        let stdoutData = '';
+        let stderrData = '';
 
         const cleanup = () => {
             if (fs.existsSync(listFile)) {
@@ -28,21 +30,35 @@ const converter = {
         };
 
         process.on('error', (err) => {
+            console.error(`[Converter] Process error:`, err.message);
             cleanup();
             onEvent('error', err);
         });
 
         process.stdout.on('data', (data) => {
-            onEvent('stdout', data.toString());
+            const text = data.toString();
+            stdoutData += text;
+            console.log(`[Converter stdout] ${text}`);
+            onEvent('stdout', data);
         });
 
         process.stderr.on('data', (data) => {
-            onEvent('stderr', data.toString());
+            const text = data.toString();
+            stderrData += text;
+            console.error(`[Converter stderr] ${text}`);
+            onEvent('stderr', data);
         });
 
         process.on('close', (code) => {
+            console.log(`[Converter] Process closed with exit code: ${code}`);
+            if (stderrData) console.error(`[Converter] Final stderr: ${stderrData}`);
+            if (stdoutData && code !== 0) console.log(`[Converter] Final stdout: ${stdoutData}`);
             cleanup();
             onEvent('close', code);
+        });
+
+        process.on('exit', (code, signal) => {
+            console.log(`[Converter] Process exit event - code: ${code}, signal: ${signal}`);
         });
 
         return process;

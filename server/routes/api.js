@@ -131,7 +131,13 @@ router.post('/upload', (req, res, next) => {
     jobs.set(jobId, job);
 
     const filePaths = files.map(f => f.path);
+    console.log(`[Job ${jobId}] Starting conversion with ${files.length} file(s) to ${outputPath}`);
     converter.convert(filePaths, outputPath, async (type, data) => {
+        if (type === 'stdout' || type === 'stderr') {
+            console.log(`[Job ${jobId}] ${type}: ${data}`);
+            return;
+        }
+        
         if (type === 'close') {
             job.status = data === 0 ? 'completed' : 'failed';
             job.progress = data === 0 ? 100 : 0;
@@ -148,7 +154,7 @@ router.post('/upload', (req, res, next) => {
                     job.outputPath = cloudUrl;
                     job.storageMode = 'cloud';
                     job.cloudUploadStatus = 'success';
-                    console.log(`[Job ${jobId}] Cloud upload successful`);
+                    console.log(`[Job ${jobId}] Cloud upload successful: ${cloudUrl}`);
 
                     // Optional: cleanup local copy to save disk space (uncomment if desired)
                     // blobUploader.cleanupLocal(outputPath);
@@ -160,7 +166,7 @@ router.post('/upload', (req, res, next) => {
                     job.cloudUploadError = uploadErr.message;
                 }
             } else if (data !== 0) {
-                console.log(`[Job ${jobId}] Conversion failed with exit code ${data}`);
+                console.error(`[Job ${jobId}] Conversion failed with exit code ${data}`);
             }
 
             // Log completion
@@ -208,33 +214,56 @@ router.post('/trigger-conversion-cloud', async (req, res) => {
 
     try {
         const downloadPath = path.join(config.tempCloudDir, blobName);
+        console.log(`[Job ${jobId}] Starting: downloading blob to ${downloadPath}`);
         await azureStorage.downloadBlob(blobName, downloadPath);
+        console.log(`[Job ${jobId}] Blob downloaded successfully`);
 
         const outputDirName = (projectName || path.parse(blobName).name).replace(/\s+/g, '_') + '_' + jobId.substring(0, 8);
         const localOutputPath = path.join(config.tempCloudDir, outputDirName);
+        console.log(`[Job ${jobId}] Starting conversion to: ${localOutputPath}`);
 
         converter.convert(downloadPath, localOutputPath, async (type, data) => {
+            console.log(`[Job ${jobId}] Converter event: type=${type}, data=${data}`);
+            
+            if (type === 'stdout' || type === 'stderr') {
+                console.log(`[Job ${jobId}] ${type}: ${data}`);
+                return;
+            }
+            
             if (type === 'close' && data === 0) {
                 try {
+                    console.log(`[Job ${jobId}] Conversion successful, uploading to Azure...`);
                     await azureStorage.uploadDirectory(localOutputPath, outputDirName);
                     // Auto-detect the actual manifest file path
                     const cloudUrl = await azureStorage.resolveCloudManifestUrl(outputDirName);
                     azureStorage.saveAzureProject({ name: outputDirName, url: cloudUrl, type: 'pointcloud', storageMode: 'cloud' });
                     job.status = 'completed'; job.progress = 100; job.outputPath = cloudUrl;
-                } catch (e) { job.status = 'failed'; job.error = e.message; }
+                    console.log(`[Job ${jobId}] Completed successfully: ${cloudUrl}`);
+                } catch (e) { 
+                    job.status = 'failed'; 
+                    job.error = e.message;
+                    console.error(`[Job ${jobId}] Upload failed: ${e.message}`);
+                }
             } else if (type === 'close') {
-                job.status = 'failed'; job.error = `Converter exited with ${data}`;
+                job.status = 'failed'; 
+                job.error = `Converter exited with ${data}`;
+                console.error(`[Job ${jobId}] Conversion failed with exit code ${data}`);
             } else if (type === 'error') {
-                job.status = 'failed'; job.error = data.message;
+                job.status = 'failed'; 
+                job.error = data.message;
+                console.error(`[Job ${jobId}] Converter error: ${data.message}`);
             }
 
             if (type === 'close') {
+                console.log(`[Job ${jobId}] Cleaning up temp files...`);
                 fs.rm(downloadPath, { force: true }, () => { });
                 fs.rm(localOutputPath, { recursive: true, force: true }, () => { });
             }
         });
     } catch (err) {
-        job.status = 'failed'; job.error = err.message;
+        job.status = 'failed'; 
+        job.error = err.message;
+        console.error(`[Job ${jobId}] Error: ${err.message}`, err);
     }
 });
 
