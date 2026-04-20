@@ -325,13 +325,24 @@ document.getElementById('confirm-delete-btn').onclick = async () => {
 function renderDashboard() {
     const totalEl = document.getElementById('total-projects-count');
     const examplesEl = document.getElementById('examples-count');
+    const cloudCountEl = document.getElementById('cloud-projects-count');
+    const cloudBadgeEl = document.getElementById('cloud-badge');
     const sidebarCount = document.getElementById('sidebar-project-count');
+
+    const cloudProjects = currentData.uploads.filter(u => u.storageMode === 'cloud');
 
     if (totalEl) totalEl.textContent = currentData.uploads.length;
     if (examplesEl) examplesEl.textContent = currentData.examples.length;
     if (sidebarCount) sidebarCount.textContent = `Projects: ${currentData.uploads.length}`;
 
-    // Recent projects (dashboard)
+    // Cloud stat card
+    if (cloudCountEl) {
+        const count = currentData.cloudProjectsCount;
+        cloudCountEl.textContent = (count !== undefined) ? count : '—';
+        if (cloudBadgeEl) cloudBadgeEl.style.display = (count > 0) ? 'block' : 'none';
+    }
+
+    // Recent projects (dashboard — all types, up to 6)
     const recentGrid = document.getElementById('recent-uploads-grid');
     const noProjectsMsg = document.getElementById('no-projects-msg');
     if (recentGrid) {
@@ -342,6 +353,25 @@ function renderDashboard() {
         } else {
             if (noProjectsMsg) noProjectsMsg.classList.add('hidden');
             recentGrid.innerHTML = items;
+        }
+    }
+
+    // ── Cloud Projects section ────────────────────────────────────────────
+    const cloudGrid = document.getElementById('cloud-uploads-grid');
+    const cloudLoadingMsg = document.getElementById('cloud-loading-msg');
+    const cloudHint = document.getElementById('cloud-section-hint');
+    if (cloudGrid) {
+        if (cloudLoadingMsg) cloudLoadingMsg.style.display = 'none';
+        if (cloudProjects.length === 0) {
+            cloudGrid.innerHTML = `<div class="empty-state">
+                <p>No cloud projects found in Azure Blob Storage.</p>
+                <p style="font-size:0.7rem;margin-top:8px;color:var(--text-dim)">Upload a point cloud and choose "Azure Cloud" as the storage destination.</p>
+            </div>`;
+            if (cloudHint) cloudHint.textContent = 'No projects in Azure Blob Storage';
+        } else {
+            cloudGrid.innerHTML = cloudProjects.map(u => renderProjectCard(u)).join('');
+            if (cloudHint) cloudHint.textContent =
+                `${cloudProjects.length} project${cloudProjects.length === 1 ? '' : 's'} discovered in Azure Blob Storage`;
         }
     }
 
@@ -361,19 +391,32 @@ function renderDashboard() {
 function renderProjectCard(item) {
     const readableName = item.name.replace(/_[a-f0-9]{8}$/, '').replace(/_/g, ' ');
     const viewerUrl = `viewer.html?load=${encodeURIComponent(item.url)}&projectId=${encodeURIComponent(item.name)}`;
+    const isCloud = item.storageMode === 'cloud';
+
     const icon = item.type === 'pointcloud'
         ? `<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M12 2a10 10 0 0 0-9.95 9h2.01A8 8 0 0 1 12 4V2zm0 20a10 10 0 0 0 9.95-9h-2.01A8 8 0 0 1 12 20v2z"/></svg>`
         : `<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="3 11 22 2 13 21 11 13 3 11"/></svg>`;
-    const typeLabel = item.storageMode === 'cloud' ? 'Cloud Project' : (item.type === 'pointcloud' ? 'Point Cloud' : 'GIS Layer');
-    const typeClass = item.storageMode === 'cloud' ? 'type-cloud' : (item.type === 'pointcloud' ? 'type-pc' : 'type-shp');
+
+    const typeLabel = isCloud ? '&#9729; Azure Cloud' : (item.type === 'pointcloud' ? 'Point Cloud' : 'GIS Layer');
+    const typeClass = isCloud ? 'type-cloud' : (item.type === 'pointcloud' ? 'type-pc' : 'type-shp');
+    const wrapperClass = isCloud ? 'item-card-wrapper cloud-card-wrapper' : 'item-card-wrapper';
+    const cardClass = isCloud ? 'item-card item-card-cloud' : 'item-card';
+    const thumbExtra = isCloud ? ' cloud-thumb' : '';
+    const cloudBadge = isCloud ? '<div class="cloud-orbit-badge">&#9729;</div>' : '';
+    const subtitle = isCloud
+        ? 'Azure Blob Storage &mdash; click to open 3D viewer'
+        : 'Local server &mdash; click to open 3D viewer';
 
     return `
-        <div class="item-card-wrapper" style="position:relative">
-            <a href="${viewerUrl}" class="item-card">
-                <div class="item-thumb type-thumb-${item.type}">${icon}</div>
+        <div class="${wrapperClass}" style="position:relative">
+            <a href="${viewerUrl}" class="${cardClass}">
+                <div class="item-thumb type-thumb-${item.type}${thumbExtra}">
+                    ${cloudBadge}
+                    ${icon}
+                </div>
                 <div class="item-info">
-                    <h4>${readableName}</h4>
-                    <p>${item.storageMode === 'cloud' ? 'Hosted on Azure Blob Storage' : 'Click to open in 3D Viewer'}</p>
+                    <h4 title="${item.name}">${readableName}</h4>
+                    <p>${subtitle}</p>
                     <span class="item-type ${typeClass}">${typeLabel}</span>
                 </div>
             </a>

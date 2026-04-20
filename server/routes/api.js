@@ -48,40 +48,52 @@ router.get('/config', (req, res) => {
     });
 });
 
-router.get('/health', (req, res) => {
-    const health = {
-        status: 'ok',
-        nodeVersion: process.version,
+router.get('/debug/converter', (req, res) => {
+    const fs = require('fs');
+    const path = require('path');
+    const { execSync } = require('child_process');
+    
+    const converterPath = config.potreeConverterPath;
+    const exists = fs.existsSync(converterPath);
+    
+    let stats = null;
+    let isExecutable = false;
+    let fileType = null;
+    let errorMsg = null;
+    
+    if (exists) {
+        try {
+            stats = fs.statSync(converterPath);
+            // Check if executable (mode & 0111)
+            isExecutable = (stats.mode & parseInt('111', 8)) !== 0;
+            
+            // Try to get file type
+            try {
+                fileType = execSync(`file "${converterPath}"`, { encoding: 'utf8' }).trim();
+            } catch (e) {
+                fileType = 'Could not determine type';
+            }
+        } catch (e) {
+            errorMsg = e.message;
+        }
+    }
+    
+    res.json({
+        path: converterPath,
+        exists,
+        isExecutable,
+        stats: stats ? {
+            size: stats.size,
+            mode: '0' + (stats.mode & parseInt('777', 8)).toString(8),
+            isFile: stats.isFile(),
+            isDirectory: stats.isDirectory()
+        } : null,
+        fileType,
+        errorMsg,
         platform: process.platform,
-        uptime: process.uptime(),
-        environment: {
-            nodeEnv: process.env.NODE_ENV,
-            isAzureAppService: !!process.env.WEBSITE_INSTANCE_ID
-        },
-        azure: {
-            enabled: config.azure.isCloudEnabled,
-            appService: config.azure.isAzureAppService,
-            connectionStringConfigured: !!process.env.AZURE_STORAGE_CONNECTION_STRING,
-            clientInitialized: !!config.azure.blobServiceClient,
-            accountName: config.azure.accountName || 'N/A'
-        },
-        converter: {
-            path: config.potreeConverterPath,
-            exists: fs.existsSync(config.potreeConverterPath),
-            platform: process.platform
-        },
-        storage: {
-            uploadsDir: config.uploadsDir,
-            uploadsExists: fs.existsSync(config.uploadsDir),
-            convertedDir: config.convertedDir,
-            convertedExists: fs.existsSync(config.convertedDir),
-            tempCloudDir: config.tempCloudDir,
-            tempCloudExists: fs.existsSync(config.tempCloudDir)
-        },
-        activeJobs: jobs.size,
-        timestamp: new Date().toISOString()
-    };
-    res.json(health);
+        cwd: process.cwd(),
+        potreeRoot: path.dirname(path.dirname(converterPath))
+    });
 });
 
 router.post('/upload', (req, res, next) => {
@@ -233,49 +245,96 @@ router.get('/status/:id', (req, res) => {
 
 router.get('/list', async (req, res) => {
     try {
-        const files = fs.readdirSync(config.convertedDir, { withFileTypes: true });
+        // ── Local projects ────────────────────────────────────────────────────
+        let files = [];
+        try {
+            files = fs.readdirSync(config.convertedDir, { withFileTypes: true });
+        } catch (e) {
+            // convertedDir may not exist yet on fresh deployments
+        }
         const local = (files || []).filter(d => d.isDirectory()).map(d => ({
-            name: d.name, url: `/pointclouds/converted/${d.name}/index.html`, type: 'pointcloud', storageMode: 'local'
+            name: d.name,
+            url: `/pointclouds/converted/${d.name}/index.html`,
+            type: 'pointcloud',
+            storageMode: 'local',
+            source: 'local'
         }));
-        
-        let cloud = azureStorage.getAzureProjects();
-        if (config.azure.isCloudEnabled && cloud.length > 0) {
+
+        // ── Cloud projects ────────────────────────────────────────────────────
+        let cloud = [];
+        if (config.azure.isCloudEnabled) {
             try {
-                const sasToken = await azureStorage.getReadSasToken();
-                let healed = false;
-                cloud = await Promise.all(cloud.map(async (p) => {
-                    let url = p.url;
-                    // Auto-heal: if stored URL points to metadata.json but blob doesn't exist,
-                    // resolve the actual manifest path
-                    if (url.includes('metadata.json')) {
-                        try {
-                            const correctedUrl = await azureStorage.resolveCloudManifestUrl(p.name);
-                            if (correctedUrl !== url) {
-                                console.log(`[API List] Auto-healed URL for ${p.name}: ${url} -> ${correctedUrl}`);
-                                url = correctedUrl;
-                                healed = true;
-                            }
-                        } catch (e) {
-                            console.warn(`[API List] Could not resolve manifest for ${p.name}:`, e.message);
-                        }
-                    }
-                    // Strip any old SAS token and append fresh one
-                    const baseUrl = url.split('?')[0];
-                    return { ...p, url: `${baseUrl}?${sasToken}` };
-                }));
-                // Persist healed URLs back to disk
-                if (healed) {
-                    const healedProjects = cloud.map(p => ({
-                        ...p,
-                        url: p.url.split('?')[0] // Save without SAS token
-                    }));
-                    fs.writeFileSync(config.azureProjectsFile, JSON.stringify(healedProjects, null, 2));
+                // 1. Dynamically discover projects from the blob container
+                const blobProjects = await azureStorage.listBlobProjects();
+
+                // 2. Load the static registry (azure_projects.json) — may contain
+                //    extra metadata like layers that blob enumeration alone can't provide
+                const registryProjects = azureStorage.getAzureProjects();
+                const registryMap = new Map(registryProjects.map(p => [p.name, p]));
+
+                // 3. Merge: registry entries take priority (preserve stored metadata);
+                //    blob-only projects are added as new entries
+                const mergedMap = new Map();
+                for (const bp of blobProjects) {
+                    mergedMap.set(bp.name, bp); // blob source as base
                 }
-            } catch (sasErr) {
-                console.error('[API List] Failed to generate Read SAS:', sasErr.message);
+                for (const rp of registryProjects) {
+                    // Overlay registry data so layers, storageMode etc. are preserved
+                    mergedMap.set(rp.name, { source: 'blob', ...mergedMap.get(rp.name), ...rp });
+                }
+
+                // 4. Attach fresh read SAS tokens to all cloud projects
+                let sasToken = '';
+                try {
+                    sasToken = await azureStorage.getReadSasToken();
+                } catch (sasErr) {
+                    console.error('[API List] Failed to generate Read SAS:', sasErr.message);
+                }
+
+                let healed = false;
+                const cloudEntries = await Promise.all(
+                    Array.from(mergedMap.values()).map(async (p) => {
+                        let url = p.url || '';
+                        // Auto-heal: resolve actual manifest path if needed
+                        if (url.includes('metadata.json') || !url) {
+                            try {
+                                const correctedUrl = await azureStorage.resolveCloudManifestUrl(p.name);
+                                if (correctedUrl !== url.split('?')[0]) {
+                                    console.log(`[API List] Auto-healed URL for ${p.name}: ${url} -> ${correctedUrl}`);
+                                    url = correctedUrl;
+                                    healed = true;
+                                }
+                            } catch (e) {
+                                console.warn(`[API List] Could not resolve manifest for ${p.name}:`, e.message);
+                            }
+                        }
+                        const baseUrl = url.split('?')[0];
+                        return {
+                            ...p,
+                            url: sasToken ? `${baseUrl}?${sasToken}` : baseUrl,
+                            storageMode: 'cloud'
+                        };
+                    })
+                );
+                cloud = cloudEntries;
+
+                // 5. Persist any healed URLs back, but only for registry-tracked projects
+                if (healed) {
+                    const updatedRegistry = cloud
+                        .filter(p => registryMap.has(p.name))
+                        .map(p => ({ ...registryMap.get(p.name), url: p.url.split('?')[0] }));
+                    if (updatedRegistry.length > 0) {
+                        fs.writeFileSync(config.azureProjectsFile, JSON.stringify(updatedRegistry, null, 2));
+                    }
+                }
+            } catch (cloudErr) {
+                console.error('[API List] Cloud enumeration failed:', cloudErr.message);
+                // Fall back to static registry only
+                cloud = azureStorage.getAzureProjects().map(p => ({ ...p, storageMode: 'cloud' }));
             }
         }
 
+        // ── Examples ──────────────────────────────────────────────────────────
         let examples = [];
         const exDir = path.join(__dirname, '../../examples');
         if (fs.existsSync(exDir)) {
@@ -283,7 +342,13 @@ router.get('/list', async (req, res) => {
                 name: f, url: `/examples/${f}`, type: 'example'
             }));
         }
-        res.json({ uploads: [...local, ...cloud], examples });
+
+        res.json({
+            uploads: [...local, ...cloud],
+            examples,
+            cloudProjectsCount: cloud.length,
+            localProjectsCount: local.length
+        });
     } catch (err) {
         console.error('[API List] Error:', err);
         res.status(500).json({ error: 'Failed to list projects' });

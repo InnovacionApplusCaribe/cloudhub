@@ -26,8 +26,9 @@
         </div>
         <ul class="nav-links">
             <li class="active" data-section="dashboard"><span class="icon">📈</span> Dashboard</li>
+            <li data-section="cloud"><span class="icon">☁</span> Cloud Projects</li>
             <li data-section="examples"><span class="icon">📚</span> Standard Examples</li>
-            <li data-section="uploads"><span class="icon">📁</span> Project Assets</li>
+            <li data-section="uploads"><span class="icon">📁</span> All Projects</li>
         </ul>
         <div class="sidebar-footer">
             <p>Server Status: <span id="server-status-dot" style="color:var(--accent)">Online</span></p>
@@ -52,6 +53,11 @@
                     <div class="label">Total Projects</div>
                     <div class="stat-value" id="total-projects-count">0</div>
                 </div>
+                <div class="stat-card stat-card-cloud">
+                    <div class="label">☁ Cloud Projects</div>
+                    <div class="stat-value" id="cloud-projects-count">—</div>
+                    <div class="stat-badge" id="cloud-badge" style="display:none">AZURE BLOB</div>
+                </div>
                 <div class="stat-card">
                     <div class="label">Library Examples</div>
                     <div class="stat-value" id="examples-count">0</div>
@@ -71,6 +77,19 @@
                     <p>No projects yet. Create your first project by uploading a point cloud.</p>
                     <button class="btn btn-primary" onclick="document.getElementById('new-upload-btn').click()">+ New
                         Project</button>
+                </div>
+            </div>
+        </section>
+
+        <section id="cloud-section" class="hidden">
+            <div class="section-header">
+                <h2>☁ Cloud Projects</h2>
+                <span class="section-hint" id="cloud-section-hint">Projects discovered in Azure Blob Storage</span>
+            </div>
+            <div id="cloud-uploads-grid" class="item-grid scrollable">
+                <div class="cloud-loading" id="cloud-loading-msg">
+                    <div class="spinner"></div>
+                    <p>Scanning Azure Blob Storage container…</p>
                 </div>
             </div>
         </section>

@@ -7,9 +7,6 @@ const { v4: uuidv4 } = require('uuid');
 const azureStorage = {
     async getUploadSas(fileName) {
         if (!config.azure.isCloudEnabled) throw new Error('Cloud storage not enabled');
-        if (!config.azure.blobServiceClient) {
-            throw new Error('Azure Blob Storage client not initialized. Please check AZURE_STORAGE_CONNECTION_STRING environment variable.');
-        }
 
         const blobName = `${uuidv4()}-${fileName}`;
         const containerClient = config.azure.blobServiceClient.getContainerClient(config.azure.rawContainer);
@@ -100,6 +97,66 @@ const azureStorage = {
         for await (const blob of blobs) {
             await containerClient.deleteBlob(blob.name);
         }
+    },
+
+    /**
+     * Dynamically enumerate all point cloud projects stored in the Azure
+     * converted-potree blob container.
+     *
+     * Strategy: list all blobs and look for manifest files
+     * (metadata.json or cloud.js) to identify project root prefixes.
+     * Returns an array of project descriptors suitable for the /api/list response.
+     */
+    async listBlobProjects() {
+        if (!config.azure.isCloudEnabled) return [];
+
+        const containerClient = config.azure.blobServiceClient.getContainerClient(config.azure.convertedContainer);
+        const baseUrl = `https://${config.azure.accountName}.blob.core.windows.net/${config.azure.convertedContainer}`;
+
+        // Manifest file names that mark a valid Potree project root
+        const manifestNames = new Set(['metadata.json', 'cloud.js']);
+
+        // projectPrefix -> manifest blob name
+        const discovered = new Map();
+
+        try {
+            for await (const blob of containerClient.listBlobsFlat()) {
+                const parts = blob.name.split('/');
+                if (parts.length < 2) continue;
+
+                const fileName = parts[parts.length - 1];
+
+                // Match patterns:
+                //   <project>/metadata.json                    (Potree 2 root)
+                //   <project>/cloud.js                         (Potree 1 root)
+                //   <project>/pointclouds/index/metadata.json  (Potree 2 nested)
+                //   <project>/pointclouds/index/cloud.js       (Potree 1 nested)
+                if (manifestNames.has(fileName)) {
+                    const projectPrefix = parts[0]; // always the top-level directory
+                    // Prefer metadata.json over cloud.js if both exist
+                    if (!discovered.has(projectPrefix) || fileName === 'metadata.json') {
+                        discovered.set(projectPrefix, blob.name);
+                    }
+                }
+            }
+        } catch (err) {
+            console.error('[AzureStorage] listBlobProjects error:', err.message);
+            return [];
+        }
+
+        const projects = [];
+        for (const [projectPrefix, manifestBlobPath] of discovered) {
+            projects.push({
+                name: projectPrefix,
+                url: `${baseUrl}/${manifestBlobPath}`,
+                type: 'pointcloud',
+                storageMode: 'cloud',
+                source: 'blob'   // marks this as dynamically discovered
+            });
+        }
+
+        console.log(`[AzureStorage] listBlobProjects discovered ${projects.length} project(s) in container "${config.azure.convertedContainer}"`);
+        return projects;
     },
     /**
      * Auto-detect the actual point cloud manifest URL for a project in Azure.

@@ -66,19 +66,4 @@ try {
     console.warn('⚠ Could not list data directory:', err.message);
 }
 
-// Validate Azure configuration if running on Azure App Service
-const isAzureAppService = process.env.WEBSITE_INSTANCE_ID !== undefined;
-if (isAzureAppService) {
-    console.log('\n⚠️  AZURE APP SERVICE ENVIRONMENT DETECTED');
-    if (!process.env.AZURE_STORAGE_CONNECTION_STRING) {
-        console.warn('⚠️  WARNING: AZURE_STORAGE_CONNECTION_STRING not set!');
-        console.warn('⚠️  Cloud storage will be disabled. To enable:');
-        console.warn('⚠️  1. Get connection string from: Storage Account → Access Keys');
-        console.warn('⚠️  2. Set it in: App Service → Configuration → Application settings');
-        console.warn('⚠️  3. Restart the app');
-    } else {
-        console.log('✓ AZURE_STORAGE_CONNECTION_STRING is configured');
-    }
-}
-
 console.log('✓ Startup initialization complete\n');
