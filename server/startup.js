@@ -14,7 +14,9 @@ console.log('🔧 Running startup initialization...');
 
 // Fix permissions on PotreeConverter binary (Linux only)
 if (process.platform !== 'win32') {
-    const binPath = path.join(__dirname, '../PotreeConverter/linux/PotreeConverter');
+    const converterDir = path.join(__dirname, '../PotreeConverter/linux');
+    const binPath = path.join(converterDir, 'PotreeConverter');
+    
     if (fs.existsSync(binPath)) {
         try {
             fs.chmodSync(binPath, 0o755);
@@ -25,6 +27,23 @@ if (process.platform !== 'win32') {
     } else {
         console.warn('⚠ PotreeConverter binary not found at:', binPath);
     }
+
+    // ✅ FIX: Set LD_LIBRARY_PATH so liblaszip.so is found at runtime
+    const currentLD = process.env.LD_LIBRARY_PATH || '';
+    if (!currentLD.includes(converterDir)) {
+        process.env.LD_LIBRARY_PATH = `${converterDir}:${currentLD}`;
+        console.log(`✓ LD_LIBRARY_PATH set to: ${process.env.LD_LIBRARY_PATH}`);
+    }
+
+    // Log all .so files present for diagnostics
+    try {
+        const files = fs.readdirSync(converterDir);
+        const soFiles = files.filter(f => f.endsWith('.so') || f.includes('.so.'));
+        console.log(`📦 Shared libraries found: ${soFiles.length > 0 ? soFiles.join(', ') : 'NONE ⚠'}`);
+    } catch (err) {
+        console.warn('⚠ Could not list converter directory:', err.message);
+    }
+
 } else {
     // Windows - verify .exe exists
     const binPath = path.join(__dirname, '../PotreeConverter/PotreeConverter.exe');

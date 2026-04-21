@@ -19,7 +19,12 @@ const converter = {
         const args = ['--list-of-files', listFile, '-o', outputPath, '--generate-page', 'index'];
         console.log(`Executing: ${config.potreeConverterPath} ${args.join(' ')}`);
 
-        const process = spawn(config.potreeConverterPath, args);
+        const process = spawn(config.potreeConverterPath, args, {
+            env: {
+                ...process.env,
+                LD_LIBRARY_PATH: path.dirname(config.potreeConverterPath)
+            }
+        });
         let stdoutData = '';
         let stderrData = '';
 

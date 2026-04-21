@@ -28,7 +28,12 @@ jobs:
           chmod +x ./PotreeConverter/linux/PotreeConverter
           ls -lah ./PotreeConverter/linux/PotreeConverter
           file ./PotreeConverter/linux/PotreeConverter
-
+      - name: Verify PotreeConverter files
+        run: |
+          ls -lah ./PotreeConverter/linux/
+          file ./PotreeConverter/linux/PotreeConverter
+          ldd ./PotreeConverter/linux/PotreeConverter || true
+          
       - name: npm install, build, and test
         run: |
           npm install
