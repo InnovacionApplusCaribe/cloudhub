@@ -5,7 +5,8 @@ WORKDIR /app
 # Install PotreeConverter runtime dependencies
 RUN apk add --no-cache \
     liblas \
-    laszip
+    laszip \
+    tbb
 
 # Copy package files
 COPY package*.json ./

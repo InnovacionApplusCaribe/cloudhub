@@ -1,0 +1,49 @@
+Converter/libs/laszip/CMakeFiles/laszip.dir/src/lasreaditemcompressed_v3.cpp.o: \
+ /home/johatech/dev/PotreeConverter/Converter/libs/laszip/src/lasreaditemcompressed_v3.cpp \
+ /usr/include/stdc-predef.h \
+ /home/johatech/dev/PotreeConverter/Converter/libs/laszip/src/lasreaditemcompressed_v3.hpp \
+ /home/johatech/dev/PotreeConverter/Converter/libs/laszip/src/lasreaditem.hpp \
+ /home/johatech/dev/PotreeConverter/Converter/libs/laszip/src/mydefs.hpp \
+ /home/johatech/dev/PotreeConverter/Converter/libs/laszip/src/arithmeticdecoder.hpp \
+ /home/johatech/dev/PotreeConverter/Converter/libs/laszip/src/bytestreamin.hpp \
+ /home/johatech/dev/PotreeConverter/Converter/libs/laszip/src/integercompressor.hpp \
+ /home/johatech/dev/PotreeConverter/Converter/libs/laszip/src/arithmeticencoder.hpp \
+ /home/johatech/dev/PotreeConverter/Converter/libs/laszip/src/bytestreamout.hpp \
+ /home/johatech/dev/PotreeConverter/Converter/libs/laszip/src/bytestreamin_array.hpp \
+ /usr/include/stdio.h \
+ /usr/include/x86_64-linux-gnu/bits/libc-header-start.h \
+ /usr/include/features.h /usr/include/features-time64.h \
+ /usr/include/x86_64-linux-gnu/bits/wordsize.h \
+ /usr/include/x86_64-linux-gnu/bits/timesize.h \
+ /usr/include/x86_64-linux-gnu/sys/cdefs.h \
+ /usr/include/x86_64-linux-gnu/bits/long-double.h \
+ /usr/include/x86_64-linux-gnu/gnu/stubs.h \
+ /usr/include/x86_64-linux-gnu/gnu/stubs-64.h \
+ /usr/lib/gcc/x86_64-linux-gnu/13/include/stddef.h \
+ /usr/lib/gcc/x86_64-linux-gnu/13/include/stdarg.h \
+ /usr/include/x86_64-linux-gnu/bits/types.h \
+ /usr/include/x86_64-linux-gnu/bits/typesizes.h \
+ /usr/include/x86_64-linux-gnu/bits/time64.h \
+ /usr/include/x86_64-linux-gnu/bits/types/__fpos_t.h \
+ /usr/include/x86_64-linux-gnu/bits/types/__mbstate_t.h \
+ /usr/include/x86_64-linux-gnu/bits/types/__fpos64_t.h \
+ /usr/include/x86_64-linux-gnu/bits/types/__FILE.h \
+ /usr/include/x86_64-linux-gnu/bits/types/FILE.h \
+ /usr/include/x86_64-linux-gnu/bits/types/struct_FILE.h \
+ /usr/include/x86_64-linux-gnu/bits/types/cookie_io_functions_t.h \
+ /usr/include/x86_64-linux-gnu/bits/stdio_lim.h \
+ /usr/include/x86_64-linux-gnu/bits/floatn.h \
+ /usr/include/x86_64-linux-gnu/bits/floatn-common.h \
+ /usr/include/x86_64-linux-gnu/bits/stdio2-decl.h \
+ /usr/include/x86_64-linux-gnu/bits/stdio.h \
+ /usr/include/x86_64-linux-gnu/bits/stdio2.h /usr/include/string.h \
+ /usr/include/x86_64-linux-gnu/bits/types/locale_t.h \
+ /usr/include/x86_64-linux-gnu/bits/types/__locale_t.h \
+ /usr/include/strings.h \
+ /usr/include/x86_64-linux-gnu/bits/strings_fortified.h \
+ /usr/include/x86_64-linux-gnu/bits/string_fortified.h \
+ /home/johatech/dev/PotreeConverter/Converter/libs/laszip/src/laszip_common_v3.hpp \
+ /home/johatech/dev/PotreeConverter/Converter/libs/laszip/src/laszip_common_v1.hpp \
+ /home/johatech/dev/PotreeConverter/Converter/libs/laszip/src/laszip_common_v2.hpp \
+ /home/johatech/dev/PotreeConverter/Converter/libs/laszip/src/laszip_decompress_selective_v3.hpp \
+ /usr/include/assert.h
