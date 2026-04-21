@@ -8,6 +8,7 @@ const config = require('../config');
 const azureStorage = require('../services/azureStorage');
 const converter = require('../services/converter');
 const blobUploader = require('../services/blobUploader');
+const projectManager = require('../services/projectManager');
 
 // Shared Job tracking
 const jobs = new Map();
@@ -116,23 +117,39 @@ router.post('/upload', (req, res, next) => {
     const jobId = uuidv4();
     const firstFile = files[0];
     const projectName = (req.body.projectName || path.parse(firstFile.originalname).name).trim();
-    const outputDirName = projectName.replace(/\s+/g, '_') + '_' + jobId.substring(0, 8);
-    const outputPath = path.join(config.convertedDir, outputDirName);
+    const existingProjectId = req.body.projectId || null;  // NEW: Support incremental uploads
+    
+    let projectId, batchPath, projectPath;
+    
+    try {
+        // NEW: Use projectManager for batch-based storage
+        const projectInfo = projectManager.initializeProject(projectName, existingProjectId);
+        projectId = projectInfo.projectId;
+        projectPath = projectInfo.projectPath;
+        batchPath = projectInfo.batchPath;
+    } catch (err) {
+        console.error('[Upload] ProjectManager error:', err.message);
+        return res.status(400).json({ error: err.message });
+    }
+
+    const batchOutputPath = path.join(batchPath, 'pointclouds');
 
     const job = {
         id: jobId,
+        projectId: projectId,  // NEW: Track project
         status: 'processing',
         progress: 0,
         startTime: Date.now(),
         fileName: files.length > 1 ? `${firstFile.originalname} (+${files.length - 1} more)` : firstFile.originalname,
         fileCount: files.length,
-        outputPath: `/pointclouds/converted/${outputDirName}/metadata.json`
+        outputPath: `/pointclouds/converted/${projectId}/meta.json`  // NEW: Point to master metadata
     };
     jobs.set(jobId, job);
 
     const filePaths = files.map(f => f.path);
-    console.log(`[Job ${jobId}] Starting conversion with ${files.length} file(s) to ${outputPath}`);
-    converter.convert(filePaths, outputPath, async (type, data) => {
+    console.log(`[Job ${jobId}] Starting conversion with ${files.length} file(s) for project ${projectId}`);
+    
+    converter.convert(filePaths, batchOutputPath, async (type, data) => {
         if (type === 'stdout' || type === 'stderr') {
             console.log(`[Job ${jobId}] ${type}: ${data}`);
             return;
@@ -143,29 +160,39 @@ router.post('/upload', (req, res, next) => {
             job.progress = data === 0 ? 100 : 0;
             if (data !== 0) job.error = `Exit code ${data}`;
 
-            // If cloud enabled and conversion succeeded, upload to blob storage
-            if (data === 0 && config.azure.isCloudEnabled) {
+            if (data === 0) {
                 try {
-                    console.log(`[Job ${jobId}] Starting cloud upload to Azure Blob Storage...`);
-                    const cloudUrl = await blobUploader.uploadConvertedProject(
-                        outputPath,
-                        path.basename(outputPath)
-                    );
-                    job.outputPath = cloudUrl;
-                    job.storageMode = 'cloud';
-                    job.cloudUploadStatus = 'success';
-                    console.log(`[Job ${jobId}] Cloud upload successful: ${cloudUrl}`);
+                    // NEW: Generate master metadata after successful conversion
+                    console.log(`[Job ${jobId}] Generating master metadata...`);
+                    const masterMeta = projectManager.generateMasterMetadata(projectPath, projectId);
+                    projectManager.saveMasterMetadata(projectPath, masterMeta);
+                    job.batchCount = masterMeta.totalBatches;
 
-                    // Optional: cleanup local copy to save disk space (uncomment if desired)
-                    // blobUploader.cleanupLocal(outputPath);
-                    // job.localCleanupStatus = 'cleaned';
-                } catch (uploadErr) {
-                    console.error(`[Job ${jobId}] Cloud upload failed:`, uploadErr.message);
-                    job.warning = 'Conversion complete but cloud upload failed - file available locally';
-                    job.cloudUploadStatus = 'failed';
-                    job.cloudUploadError = uploadErr.message;
+                    // If cloud enabled, upload entire project (all batches) to blob storage
+                    if (config.azure.isCloudEnabled) {
+                        try {
+                            console.log(`[Job ${jobId}] Starting cloud upload to Azure Blob Storage...`);
+                            const cloudUrl = await blobUploader.uploadConvertedProject(
+                                projectPath,
+                                projectId  // Upload the entire project now
+                            );
+                            job.outputPath = cloudUrl;
+                            job.storageMode = 'cloud';
+                            job.cloudUploadStatus = 'success';
+                            console.log(`[Job ${jobId}] Cloud upload successful: ${cloudUrl}`);
+                        } catch (uploadErr) {
+                            console.error(`[Job ${jobId}] Cloud upload failed:`, uploadErr.message);
+                            job.warning = 'Conversion complete but cloud upload failed - file available locally';
+                            job.cloudUploadStatus = 'failed';
+                            job.cloudUploadError = uploadErr.message;
+                        }
+                    }
+                } catch (metaErr) {
+                    console.error(`[Job ${jobId}] Failed to generate master metadata:`, metaErr.message);
+                    job.warning = 'Conversion successful but metadata generation failed';
+                    job.metadataError = metaErr.message;
                 }
-            } else if (data !== 0) {
+            } else {
                 console.error(`[Job ${jobId}] Conversion failed with exit code ${data}`);
             }
 
@@ -178,7 +205,10 @@ router.post('/upload', (req, res, next) => {
         }
     });
 
-    res.json({ jobId });
+    res.json({ 
+        jobId,
+        projectId  // NEW: Return projectId so user can add more files
+    });
 });
 
 router.get('/upload-sas', async (req, res) => {
@@ -613,6 +643,43 @@ router.get('/project-layers/:id', (req, res) => {
     }
 
     res.json(layers);
+});
+
+// ─── NEW PROJECT MANAGEMENT ENDPOINTS ──────────────────────────────
+
+/**
+ * GET /api/projects
+ * List all existing projects with metadata
+ * Supports incremental upload workflow
+ */
+router.get('/projects', (req, res) => {
+    try {
+        const projects = projectManager.getAllProjects();
+        console.log(`[API] Listed ${projects.length} project(s)`);
+        res.json(projects);
+    } catch (err) {
+        console.error('[API] Error listing projects:', err.message);
+        res.status(500).json({ error: err.message });
+    }
+});
+
+/**
+ * GET /api/projects/:projectId
+ * Get detailed information about a specific project
+ * Shows all batches and their metadata
+ */
+router.get('/projects/:projectId', (req, res) => {
+    try {
+        const project = projectManager.getProjectDetails(req.params.projectId);
+        if (!project) {
+            return res.status(404).json({ error: 'Project not found' });
+        }
+        console.log(`[API] Retrieved details for project: ${req.params.projectId}`);
+        res.json(project);
+    } catch (err) {
+        console.error('[API] Error retrieving project:', err.message);
+        res.status(500).json({ error: err.message });
+    }
 });
 
 module.exports = router;
