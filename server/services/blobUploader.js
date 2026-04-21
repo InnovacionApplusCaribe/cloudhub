@@ -10,6 +10,38 @@ const config = require('../config');
 
 const blobUploader = {
     /**
+     * Upload file to blob storage with retry logic
+     * @private
+     */
+    async uploadFileWithRetry(blockBlobClient, localPath, azurePath, maxRetries = 3) {
+        let lastError;
+        
+        for (let attempt = 1; attempt <= maxRetries; attempt++) {
+            try {
+                const fileSize = fs.statSync(localPath).size;
+                await blockBlobClient.uploadFile(localPath);
+                
+                const fileSizeMB = (fileSize / 1024 / 1024).toFixed(2);
+                console.log(`  ✓ ${azurePath} (${fileSizeMB} MB)`);
+                return true;
+            } catch (err) {
+                lastError = err;
+                console.warn(`  ⚠ Attempt ${attempt}/${maxRetries} failed for ${azurePath}: ${err.message}`);
+                
+                if (attempt < maxRetries) {
+                    // Exponential backoff: 1s, 2s, 4s
+                    const delayMs = 1000 * Math.pow(2, attempt - 1);
+                    console.log(`  ⏱ Retrying in ${delayMs}ms...`);
+                    await new Promise(resolve => setTimeout(resolve, delayMs));
+                }
+            }
+        }
+        
+        console.error(`  ✗ Failed to upload ${azurePath} after ${maxRetries} attempts: ${lastError.message}`);
+        return false;
+    },
+
+    /**
      * Upload converted point cloud directory to Azure Blob Storage
      * @param {string} localPath - Local path to converted directory
      * @param {string} projectName - Project name for blob path prefix
@@ -37,6 +69,14 @@ const blobUploader = {
 
             console.log(`📤 Uploading converted project to Azure: ${projectName}`);
             
+            // Track upload statistics
+            const stats = {
+                totalFiles: 0,
+                successfulFiles: 0,
+                failedFiles: 0,
+                failedPaths: []
+            };
+            
             // Recursively upload all files
             const uploadRecursive = async (currentLocalPath, currentAzurePrefix) => {
                 const items = fs.readdirSync(currentLocalPath, { withFileTypes: true });
@@ -49,24 +89,45 @@ const blobUploader = {
                         // Recursively handle subdirectories
                         await uploadRecursive(fullLocalPath, fullAzurePath);
                     } else {
-                        // Upload file with progress logging
+                        // Upload file with retry logic - CONTINUE ON FAILURES
+                        stats.totalFiles++;
                         try {
                             const blockBlobClient = containerClient.getBlockBlobClient(fullAzurePath);
-                            const fileSize = fs.statSync(fullLocalPath).size;
+                            const success = await this.uploadFileWithRetry(blockBlobClient, fullLocalPath, fullAzurePath);
                             
-                            await blockBlobClient.uploadFile(fullLocalPath);
-                            
-                            const fileSizeMB = (fileSize / 1024 / 1024).toFixed(2);
-                            console.log(`  ✓ ${fullAzurePath} (${fileSizeMB} MB)`);
+                            if (success) {
+                                stats.successfulFiles++;
+                            } else {
+                                stats.failedFiles++;
+                                stats.failedPaths.push(fullAzurePath);
+                            }
                         } catch (fileErr) {
-                            console.error(`  ✗ Failed to upload ${fullAzurePath}:`, fileErr.message);
-                            throw fileErr;
+                            // Catch unexpected errors and continue with next file
+                            console.error(`  ✗ Unexpected error uploading ${fullAzurePath}:`, fileErr.message);
+                            stats.failedFiles++;
+                            stats.failedPaths.push(fullAzurePath);
                         }
                     }
                 }
             };
 
             await uploadRecursive(localPath, projectName);
+            
+            // Report statistics
+            console.log(`\n📊 Upload Summary:`);
+            console.log(`  Total files: ${stats.totalFiles}`);
+            console.log(`  Successful: ${stats.successfulFiles}`);
+            console.log(`  Failed: ${stats.failedFiles}`);
+            
+            if (stats.failedFiles > 0) {
+                console.warn(`⚠ ${stats.failedFiles} file(s) failed to upload:`);
+                stats.failedPaths.forEach(p => console.warn(`    - ${p}`));
+            }
+            
+            // Only throw error if ALL files failed
+            if (stats.successfulFiles === 0 && stats.totalFiles > 0) {
+                throw new Error('Cloud upload failed: No files could be uploaded');
+            }
             
             // Generate and return cloud URL
             const cloudUrl = `https://${config.azure.accountName}.blob.core.windows.net/${config.azure.convertedContainer}/${projectName}/index.html`;

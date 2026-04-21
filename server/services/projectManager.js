@@ -69,7 +69,8 @@ class ProjectManager {
 
         const batches = batchDirs.map(dir => {
             const batchId = dir.name;
-            const metaPath = path.join(projectPath, batchId, 'metadata.json');
+            // Converter outputs to batch_XXX/pointclouds/, so metadata is inside pointclouds dir
+            const metaPath = path.join(projectPath, batchId, 'pointclouds', 'metadata.json');
             let created = new Date();
 
             if (fs.existsSync(metaPath)) {
@@ -84,7 +85,7 @@ class ProjectManager {
             return {
                 id: batchId,
                 created: created.toISOString(),
-                url: `./${batchId}/metadata.json`
+                url: `./${batchId}/pointclouds/metadata.json`
             };
         });
 
