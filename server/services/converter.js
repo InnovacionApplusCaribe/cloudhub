@@ -22,7 +22,7 @@ const converter = {
         const converterProcess = spawn(config.potreeConverterPath, args, {
             env: {
                 ...process.env,
-                LD_LIBRARY_PATH: path.dirname(config.potreeConverterPath)
+                LD_LIBRARY_PATH: `${path.dirname(config.potreeConverterPath)}:${process.env.LD_LIBRARY_PATH || ''}`
             }
         });
         let stdoutData = '';

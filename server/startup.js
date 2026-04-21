@@ -40,6 +40,12 @@ if (process.platform !== 'win32') {
         const files = fs.readdirSync(converterDir);
         const soFiles = files.filter(f => f.endsWith('.so') || f.includes('.so.'));
         console.log(`📦 Shared libraries found: ${soFiles.length > 0 ? soFiles.join(', ') : 'NONE ⚠'}`);
+        
+        // Specific check for libtbb.so.12 which is causing issues
+        if (!soFiles.some(f => f.startsWith('libtbb.so.12'))) {
+            console.error('❌ CRITICAL: libtbb.so.12 is MISSING from the linux converter directory.');
+            console.error('   Please ensure you have added libtbb.so.12 to your repository in: PotreeConverter/linux/');
+        }
     } catch (err) {
         console.warn('⚠ Could not list converter directory:', err.message);
     }
