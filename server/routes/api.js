@@ -13,6 +13,16 @@ const projectManager = require('../services/projectManager');
 // Shared Job tracking
 const jobs = new Map();
 
+// Server-side cache for project list
+let projectsCache = null;
+let cacheTimestamp = 0;
+const CACHE_TTL = 60 * 1000; // 60 seconds
+
+function clearProjectsCache() {
+    console.log('[Cache] Invalidating projects cache');
+    projectsCache = null;
+}
+
 // Multer setup for local uploads
 const storage = multer.diskStorage({
     destination: (req, file, cb) => {
@@ -209,6 +219,7 @@ router.post('/upload', (req, res, next) => {
         jobId,
         projectId  // NEW: Return projectId so user can add more files
     });
+    clearProjectsCache();
 });
 
 router.get('/upload-sas', async (req, res) => {
@@ -269,6 +280,7 @@ router.post('/trigger-conversion-cloud', async (req, res) => {
                     azureStorage.saveAzureProject({ name: outputDirName, url: cloudUrl, type: 'pointcloud', storageMode: 'cloud' });
                     job.status = 'completed'; job.progress = 100; job.outputPath = cloudUrl;
                     console.log(`[Job ${jobId}] Completed successfully: ${cloudUrl}`);
+                    clearProjectsCache();
                 } catch (e) { 
                     job.status = 'failed'; 
                     job.error = e.message;
@@ -303,7 +315,14 @@ router.get('/status/:id', (req, res) => {
 });
 
 router.get('/list', async (req, res) => {
+    // Return cached data if available and not expired
+    const now = Date.now();
+    if (projectsCache && (now - cacheTimestamp < CACHE_TTL)) {
+        return res.json(projectsCache);
+    }
+
     try {
+        console.log('[API List] Fetching fresh project list...');
         // ── Local projects ────────────────────────────────────────────────────
         let files = [];
         try {
@@ -323,26 +342,24 @@ router.get('/list', async (req, res) => {
         let cloud = [];
         if (config.azure.isCloudEnabled) {
             try {
-                // 1. Dynamically discover projects from the blob container
-                const blobProjects = await azureStorage.listBlobProjects();
-
-                // 2. Load the static registry (azure_projects.json) — may contain
-                //    extra metadata like layers that blob enumeration alone can't provide
+                // 1. Load the static registry (azure_projects.json) first
                 const registryProjects = azureStorage.getAzureProjects();
                 const registryMap = new Map(registryProjects.map(p => [p.name, p]));
 
-                // 3. Merge: registry entries take priority (preserve stored metadata);
-                //    blob-only projects are added as new entries
+                // 2. Dynamically discover prefixes from the blob container (Fast hierarchy listing)
+                const blobProjects = await azureStorage.listBlobProjects();
+
+                // 3. Merge: registry entries take priority; blob-only projects are added
                 const mergedMap = new Map();
                 for (const bp of blobProjects) {
-                    mergedMap.set(bp.name, bp); // blob source as base
+                    mergedMap.set(bp.name, bp);
                 }
                 for (const rp of registryProjects) {
-                    // Overlay registry data so layers, storageMode etc. are preserved
-                    mergedMap.set(rp.name, { source: 'blob', ...mergedMap.get(rp.name), ...rp });
+                    // Overlay registry data
+                    mergedMap.set(rp.name, { ...mergedMap.get(rp.name), ...rp });
                 }
 
-                // 4. Attach fresh read SAS tokens to all cloud projects
+                // 4. Attach fresh read SAS tokens
                 let sasToken = '';
                 try {
                     sasToken = await azureStorage.getReadSasToken();
@@ -354,12 +371,17 @@ router.get('/list', async (req, res) => {
                 const cloudEntries = await Promise.all(
                     Array.from(mergedMap.values()).map(async (p) => {
                         let url = p.url || '';
-                        // Auto-heal: resolve actual manifest path if needed
-                        if (url.includes('metadata.json') || !url) {
+                        
+                        // ONLY resolve manifest if we don't have a specific URL yet 
+                        // and it's NOT already in the registry with a valid URL
+                        const isGeneric = url.endsWith('metadata.json') && !registryMap.has(p.name);
+                        
+                        if (!url || isGeneric) {
                             try {
                                 const correctedUrl = await azureStorage.resolveCloudManifestUrl(p.name);
-                                if (correctedUrl !== url.split('?')[0]) {
-                                    console.log(`[API List] Auto-healed URL for ${p.name}: ${url} -> ${correctedUrl}`);
+                                const baseUrl = correctedUrl.split('?')[0];
+                                if (baseUrl !== url.split('?')[0]) {
+                                    console.log(`[API List] Resolved manifest URL for ${p.name}: ${baseUrl}`);
                                     url = correctedUrl;
                                     healed = true;
                                 }
@@ -367,28 +389,44 @@ router.get('/list', async (req, res) => {
                                 console.warn(`[API List] Could not resolve manifest for ${p.name}:`, e.message);
                             }
                         }
+
                         const baseUrl = url.split('?')[0];
+                        
+                        // Also append SAS token to all layers if present
+                        const updatedLayers = (p.layers || []).map(l => {
+                            if (sasToken && l.url && l.url.includes('.blob.core.windows.net')) {
+                                return { ...l, url: `${l.url.split('?')[0]}?${sasToken}` };
+                            }
+                            return l;
+                        });
+
                         return {
                             ...p,
                             url: sasToken ? `${baseUrl}?${sasToken}` : baseUrl,
+                            layers: updatedLayers,
                             storageMode: 'cloud'
                         };
                     })
                 );
                 cloud = cloudEntries;
 
-                // 5. Persist any healed URLs back, but only for registry-tracked projects
+                // 5. Persist any healed URLs back to registry for robust tracking
                 if (healed) {
-                    const updatedRegistry = cloud
-                        .filter(p => registryMap.has(p.name))
-                        .map(p => ({ ...registryMap.get(p.name), url: p.url.split('?')[0] }));
-                    if (updatedRegistry.length > 0) {
-                        fs.writeFileSync(config.azureProjectsFile, JSON.stringify(updatedRegistry, null, 2));
-                    }
+                    cloud.forEach(p => {
+                        // Only persist if we actually resolved something new
+                        const regEntry = registryMap.get(p.name);
+                        if (!regEntry || regEntry.url !== p.url.split('?')[0]) {
+                            azureStorage.saveAzureProject({
+                                name: p.name,
+                                url: p.url.split('?')[0],
+                                type: p.type || 'pointcloud',
+                                layers: p.layers || []
+                            });
+                        }
+                    });
                 }
             } catch (cloudErr) {
                 console.error('[API List] Cloud enumeration failed:', cloudErr.message);
-                // Fall back to static registry only
                 cloud = azureStorage.getAzureProjects().map(p => ({ ...p, storageMode: 'cloud' }));
             }
         }
@@ -402,12 +440,20 @@ router.get('/list', async (req, res) => {
             }));
         }
 
-        res.json({
+        const response = {
             uploads: [...local, ...cloud],
             examples,
             cloudProjectsCount: cloud.length,
-            localProjectsCount: local.length
-        });
+            localProjectsCount: local.length,
+            cached: false,
+            timestamp: now
+        };
+
+        // Update cache
+        projectsCache = response;
+        cacheTimestamp = now;
+
+        res.json(response);
     } catch (err) {
         console.error('[API List] Error:', err);
         res.status(500).json({ error: 'Failed to list projects' });
@@ -469,7 +515,7 @@ router.delete('/delete/:id', async (req, res) => {
             // Delete the converted visualization directory
             await fs.promises.rm(localPath, { recursive: true, force: true });
             console.log(`[Delete] Successfully deleted local directory: ${localPath}`);
-
+            clearProjectsCache();
             res.json({ success: true, mode: 'local' });
         } catch (err) {
             console.error(`[Delete] Error during local deletion:`, err);
@@ -511,12 +557,24 @@ router.post('/upload-layer', (req, res, next) => {
     }
 
     const type = primaryFile.originalname.toLowerCase().endsWith('.shp') ? 'SHP' : 'KML';
-    let responseData = { success: true, type, files: files.map(f => f.originalname) };
+    const color = req.body.color || '#00FF41';
+    let responseData = { success: true, type, color, files: files.map(f => f.originalname) };
 
     try {
-        const cloudProject = azureStorage.getAzureProjects().find(p => p.name === projectId);
+        let cloudProject = azureStorage.getAzureProjects().find(p => p.name === projectId);
+        let isCloudProject = !!cloudProject;
 
-        if (cloudProject && config.azure.isCloudEnabled) {
+        // Fallback: If not in registry but cloud is enabled, probe Azure
+        if (!isCloudProject && config.azure.isCloudEnabled) {
+            try {
+                const containerClient = config.azure.blobServiceClient.getContainerClient(config.azure.convertedContainer);
+                const prefixBlobs = containerClient.listBlobsFlat({ prefix: projectId });
+                const first = await prefixBlobs.next();
+                if (!first.done) isCloudProject = true;
+            } catch (e) { }
+        }
+
+        if (isCloudProject && config.azure.isCloudEnabled) {
             // Upload to Azure
             const containerClient = config.azure.blobServiceClient.getContainerClient(config.azure.convertedContainer);
             for (const file of files) {
@@ -529,15 +587,30 @@ router.post('/upload-layer', (req, res, next) => {
             const primaryUrl = `https://${config.azure.accountName}.blob.core.windows.net/${config.azure.convertedContainer}/${projectId}/layers/${primaryFile.originalname}`;
             responseData.primaryUrl = primaryUrl;
 
-            // Update cloud manifest metadata
-            cloudProject.layers = cloudProject.layers || [];
-            if (!cloudProject.layers.find(l => l.name === primaryFile.originalname)) {
-                cloudProject.layers.push({ name: primaryFile.originalname, url: primaryUrl, type });
-                // We need to persist changes back to azure_projects.json
-                const allProjects = azureStorage.getAzureProjects().map(p => p.name === projectId ? cloudProject : p);
-                fs.writeFileSync(config.azureProjectsFile, JSON.stringify(allProjects, null, 2));
+            // Update cloud manifest metadata using robust UPSERT
+            let layers = await azureStorage.getProjectLayers(projectId);
+
+            if (!layers.find(l => l.name === primaryFile.originalname)) {
+                layers.push({ name: primaryFile.originalname, url: primaryUrl, type, color });
+                
+                // 1. Save to cloud (Source of Truth)
+                await azureStorage.saveProjectLayers(projectId, layers);
+
+                // 2. Update local registry (Cache)
+                azureStorage.saveAzureProject({
+                    name: projectId,
+                    layers: layers
+                });
             }
-        } else {
+
+            // Append SAS token for the response so the viewer can load it immediately
+                if (config.azure.isCloudEnabled) {
+                    try {
+                        const sasToken = await azureStorage.getReadSasToken();
+                        if (sasToken) responseData.primaryUrl = `${primaryUrl}?${sasToken}`;
+                    } catch (e) { console.error('[LayerUpload] SAS generation failed:', e.message); }
+                }
+            } else {
             // Local project
             console.log(`[LayerUpload] Processing local project: "${projectId}"`);
             const projectDir = path.join(config.convertedDir, projectId, 'layers');
@@ -583,13 +656,14 @@ router.post('/upload-layer', (req, res, next) => {
                 }
 
                 if (!layers.find(l => l.name === primaryFile.originalname)) {
-                    layers.push({ name: primaryFile.originalname, url: primaryUrl, type });
+                    layers.push({ name: primaryFile.originalname, url: primaryUrl, type, color });
                     fs.writeFileSync(manifestPath, JSON.stringify(layers, null, 2));
                     console.log(`[LayerUpload] Manifest updated successfully: ${manifestPath}`);
                 }
             }
         }
 
+        clearProjectsCache();
         res.json(responseData);
     } catch (err) {
         console.error('Layer upload error:', err);
@@ -597,11 +671,42 @@ router.post('/upload-layer', (req, res, next) => {
     }
 });
 
-router.get('/project-layers/:id', (req, res) => {
+router.get('/project-layers/:id', async (req, res) => {
     const id = req.params.id;
     const cloudProject = azureStorage.getAzureProjects().find(p => p.name === id);
-    if (cloudProject) {
-        return res.json(cloudProject.layers || []);
+    if (cloudProject || id.includes('_')) { // id.includes('_') is a heuristic for cloud projects if registry is missing
+        let layers = [];
+        
+        try {
+            // Priority 1: Fetch from Cloud Source of Truth (robust)
+            layers = await azureStorage.getProjectLayers(id);
+            
+            // Priority 2: Fallback to registry if cloud fetch failed/empty
+            if (layers.length === 0 && cloudProject) {
+                layers = cloudProject.layers || [];
+            }
+        } catch (e) {
+            console.warn(`[API ProjectLayers] Cloud fetch failed for ${id}, using registry fallback`);
+            if (cloudProject) layers = cloudProject.layers || [];
+        }
+        
+        // Append SAS tokens for cloud layers
+        if (config.azure.isCloudEnabled && layers.length > 0) {
+            try {
+                const sasToken = await azureStorage.getReadSasToken();
+                if (sasToken) {
+                    layers = layers.map(l => {
+                        if (l.url && l.url.includes('.blob.core.windows.net')) {
+                            return { ...l, url: `${l.url.split('?')[0]}?${sasToken}` };
+                        }
+                        return l;
+                    });
+                }
+            } catch (e) {
+                console.error('[API ProjectLayers] Failed to generate SAS:', e.message);
+            }
+        }
+        return res.json(layers);
     }
 
     const manifestPath = path.join(config.convertedDir, id, 'layers.json');
@@ -678,6 +783,56 @@ router.get('/projects/:projectId', (req, res) => {
         res.json(project);
     } catch (err) {
         console.error('[API] Error retrieving project:', err.message);
+        res.status(500).json({ error: err.message });
+    }
+});
+
+/**
+ * GET /api/proxy-layer
+ * Proxies requests to Azure Blob Storage to bypass browser CORS restrictions
+ */
+router.get('/proxy-layer', async (req, res) => {
+    const targetUrl = req.query.url;
+    if (!targetUrl) return res.status(400).json({ error: 'URL parameter required' });
+
+    try {
+        // Use Node 18 fetch
+        const response = await fetch(targetUrl);
+        if (!response.ok) {
+            console.error(`[Proxy] Target returned ${response.status}: ${targetUrl}`);
+            return res.status(response.status).send(response.statusText);
+        }
+
+        // Pass through essential headers
+        const contentType = response.headers.get('content-type');
+        if (contentType) res.setHeader('Content-Type', contentType);
+        
+        const contentLength = response.headers.get('content-length');
+        if (contentLength) res.setHeader('Content-Length', contentLength);
+
+        // Stream the body
+        const body = response.body;
+        if (body) {
+            const reader = body.getReader();
+            const stream = new ReadableStream({
+                async start(controller) {
+                    while (true) {
+                        const { done, value } = await reader.read();
+                        if (done) break;
+                        controller.enqueue(value);
+                    }
+                    controller.close();
+                }
+            });
+            
+            // Convert web stream to Node stream for res.pipe equivalent or just send
+            const nodeStream = require('stream').Readable.from(stream);
+            nodeStream.pipe(res);
+        } else {
+            res.end();
+        }
+    } catch (err) {
+        console.error('[Proxy] Error:', err.message);
         res.status(500).json({ error: err.message });
     }
 });

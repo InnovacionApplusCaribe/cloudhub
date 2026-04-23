@@ -10,9 +10,11 @@ export class ShapefileLoader {
 		this.defaultZ = null;
 	}
 
-	async load(path) {
+	async load(path, color = 0x00FF41) {
 		const features = await this.loadShapefileFeatures(path);
 		const node = new GisLayer("Shapefile Layer");
+		node.color = color;
+		const threeColor = new THREE.Color(color);
 
 		let transform = this.transform;
 		if (transform === null) {
@@ -165,7 +167,7 @@ export class ShapefileLoader {
 
 			const sphereGeometry = new THREE.SphereGeometry(0.8, 12, 12);  // Like Measure tool
 			const pointMaterial = new THREE.MeshLambertMaterial({
-				color: 0x00FF41,  // Neon green
+				color: threeColor,
 				depthTest: false,
 				depthWrite: false
 			});
@@ -189,7 +191,7 @@ export class ShapefileLoader {
 
 			// Use LineBasicMaterial with enhanced visibility
 			const material = new THREE.LineBasicMaterial({
-				color: 0x00FF41,  // Neon green (matches points)
+				color: threeColor,
 				linewidth: 3,  // Note: only works on some systems; we'll handle via ShaderMaterial if needed
 				depthTest: false,  // Always render on top
 				depthWrite: false,
@@ -212,7 +214,7 @@ export class ShapefileLoader {
 
 			// Material for polygon fills (semi-transparent)
 			const fillMaterial = new THREE.MeshLambertMaterial({
-				color: 0x00FF41,
+				color: threeColor,
 				opacity: 0.40,  // Semi-transparent
 				transparent: true,
 				side: THREE.DoubleSide,
@@ -223,7 +225,7 @@ export class ShapefileLoader {
 
 			// Material for polygon outlines (solid edges)
 			const outlineMaterial = new THREE.LineBasicMaterial({
-				color: 0x00FF41,
+				color: threeColor,
 				linewidth: 2,
 				depthTest: false,
 				depthWrite: false,
@@ -275,8 +277,43 @@ export class ShapefileLoader {
 
 	async loadShapefileFeatures(file) {
 		let features = [];
-		let source = await shapefile.open(file);
+		
+		// To prevent the shapefile library from incorrectly appending extensions 
+		// to URLs with SAS tokens (e.g. ...sig=ABC -> ...sig=ABC.shp),
+		// we manually fetch the buffers ourselves.
+		let shpBuffer, dbfBuffer;
 
+		const getProxiedUrl = (url) => {
+			if (url && url.includes('.blob.core.windows.net')) {
+				return `/api/proxy-layer?url=${encodeURIComponent(url)}`;
+			}
+			return url;
+		};
+
+		try {
+			const shpRes = await fetch(getProxiedUrl(file));
+			if (!shpRes.ok) throw new Error(`Failed to fetch SHP: ${shpRes.statusText}`);
+			shpBuffer = await shpRes.arrayBuffer();
+
+			// Calculate DBF URL correctly from original URL
+			let dbfUrl = file;
+			if (typeof file === 'string') {
+				const urlObj = new URL(file, window.location.origin);
+				urlObj.pathname = urlObj.pathname.replace(/\.shp$/i, '.dbf');
+				dbfUrl = urlObj.toString();
+			}
+
+			const dbfRes = await fetch(getProxiedUrl(dbfUrl));
+			if (dbfRes.ok) {
+				dbfBuffer = await dbfRes.arrayBuffer();
+			}
+		} catch (err) {
+			console.error("[ShapefileLoader] Fetch error:", err);
+			throw err;
+		}
+
+		// Open with buffers directly
+		let source = await shapefile.open(shpBuffer, dbfBuffer);
 		while (true) {
 			let result = await source.read();
 			if (result.done) break;

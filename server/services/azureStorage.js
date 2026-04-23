@@ -104,9 +104,9 @@ const azureStorage = {
      * Dynamically enumerate all point cloud projects stored in the Azure
      * converted-potree blob container.
      *
-     * Strategy: list all blobs and look for manifest files
-     * (metadata.json or cloud.js) to identify project root prefixes.
-     * Returns an array of project descriptors suitable for the /api/list response.
+     * Strategy: List top-level folders (prefixes) and assume they are projects.
+     * This is MUCH faster than listBlobsFlat() which would iterate over every
+     * single file in every project.
      */
     async listBlobProjects() {
         if (!config.azure.isCloudEnabled) return [];
@@ -114,30 +114,25 @@ const azureStorage = {
         const containerClient = config.azure.blobServiceClient.getContainerClient(config.azure.convertedContainer);
         const baseUrl = `https://${config.azure.accountName}.blob.core.windows.net/${config.azure.convertedContainer}`;
 
-        // Manifest file names that mark a valid Potree project root
-        const manifestNames = new Set(['metadata.json', 'cloud.js']);
-
-        // projectPrefix -> manifest blob name
-        const discovered = new Map();
+        const projects = [];
 
         try {
-            for await (const blob of containerClient.listBlobsFlat()) {
-                const parts = blob.name.split('/');
-                if (parts.length < 2) continue;
-
-                const fileName = parts[parts.length - 1];
-
-                // Match patterns:
-                //   <project>/metadata.json                    (Potree 2 root)
-                //   <project>/cloud.js                         (Potree 1 root)
-                //   <project>/pointclouds/index/metadata.json  (Potree 2 nested)
-                //   <project>/pointclouds/index/cloud.js       (Potree 1 nested)
-                if (manifestNames.has(fileName)) {
-                    const projectPrefix = parts[0]; // always the top-level directory
-                    // Prefer metadata.json over cloud.js if both exist
-                    if (!discovered.has(projectPrefix) || fileName === 'metadata.json') {
-                        discovered.set(projectPrefix, blob.name);
-                    }
+            // Use hierarchy listing with '/' delimiter to only see the top-level "folders"
+            for await (const item of containerClient.listBlobsByHierarchy('/')) {
+                if (item.kind === 'prefix') {
+                    // prefix is like "project_name/"
+                    const projectName = item.name.replace(/\/$/, '');
+                    
+                    // We default to metadata.json (Potree 2.0) as it's the modern standard.
+                    // api.js will "auto-heal" if it needs to probe deeper, but we'll 
+                    // minimize that by providing a sensible default.
+                    projects.push({
+                        name: projectName,
+                        url: `${baseUrl}/${projectName}/metadata.json`,
+                        type: 'pointcloud',
+                        storageMode: 'cloud',
+                        source: 'blob'
+                    });
                 }
             }
         } catch (err) {
@@ -145,18 +140,7 @@ const azureStorage = {
             return [];
         }
 
-        const projects = [];
-        for (const [projectPrefix, manifestBlobPath] of discovered) {
-            projects.push({
-                name: projectPrefix,
-                url: `${baseUrl}/${manifestBlobPath}`,
-                type: 'pointcloud',
-                storageMode: 'cloud',
-                source: 'blob'   // marks this as dynamically discovered
-            });
-        }
-
-        console.log(`[AzureStorage] listBlobProjects discovered ${projects.length} project(s) in container "${config.azure.convertedContainer}"`);
+        console.log(`[AzureStorage] listBlobProjects discovered ${projects.length} prefix(es) in container "${config.azure.convertedContainer}"`);
         return projects;
     },
     /**
@@ -240,13 +224,80 @@ const azureStorage = {
 
     saveAzureProject(project) {
         const projects = this.getAzureProjects();
-        projects.push(project);
+        const index = projects.findIndex(p => p.name === project.name);
+        if (index >= 0) {
+            // Update existing
+            projects[index] = { ...projects[index], ...project };
+        } else {
+            // Add new
+            projects.push(project);
+        }
         fs.writeFileSync(config.azureProjectsFile, JSON.stringify(projects, null, 2));
     },
 
     removeAzureProject(id) {
         const projects = this.getAzureProjects().filter(p => p.name !== id);
         fs.writeFileSync(config.azureProjectsFile, JSON.stringify(projects, null, 2));
+    },
+
+    /**
+     * Fetch the layers.json manifest from the project's folder in Azure Blob Storage.
+     * This ensures layer persistence even if the local registry is lost.
+     */
+    async getProjectLayers(projectId) {
+        if (!config.azure.isCloudEnabled) return [];
+        
+        const containerClient = config.azure.blobServiceClient.getContainerClient(config.azure.convertedContainer);
+        const blobName = `${projectId}/layers.json`;
+        const blobClient = containerClient.getBlobClient(blobName);
+
+        try {
+            const exists = await blobClient.exists();
+            if (!exists) return [];
+
+            const downloadResponse = await blobClient.download();
+            const content = await this.streamToString(downloadResponse.readableStreamBody);
+            return JSON.parse(content);
+        } catch (err) {
+            console.error(`[AzureStorage] Failed to fetch layers.json for ${projectId}:`, err.message);
+            return [];
+        }
+    },
+
+    /**
+     * Upload the layers.json manifest to the project's folder in Azure Blob Storage.
+     */
+    async saveProjectLayers(projectId, layers) {
+        if (!config.azure.isCloudEnabled) return;
+
+        const containerClient = config.azure.blobServiceClient.getContainerClient(config.azure.convertedContainer);
+        const blobName = `${projectId}/layers.json`;
+        const blockBlobClient = containerClient.getBlockBlobClient(blobName);
+
+        try {
+            const content = JSON.stringify(layers, null, 2);
+            await blockBlobClient.upload(content, content.length);
+            console.log(`[AzureStorage] Successfully saved layers.json to cloud for project: ${projectId}`);
+        } catch (err) {
+            console.error(`[AzureStorage] Failed to save layers.json for ${projectId}:`, err.message);
+            throw err;
+        }
+    },
+
+    /**
+     * Helper to convert a readable stream to a string.
+     */
+    async streamToString(readableStream) {
+        return new Promise((resolve, reject) => {
+            const chunks = [];
+            readableStream.on("data", (data) => {
+                chunks.push(data.toString());
+            });
+            readableStream.on("end", () => {
+                resolve(chunks.join(""));
+            });
+            readableStream.on("error", reject);
+        });
     }
 };
 

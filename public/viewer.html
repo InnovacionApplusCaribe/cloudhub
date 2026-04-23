@@ -455,6 +455,32 @@
             opacity: 1;
             color: var(--accent);
         }
+
+        /* Color picker styling */
+        .layer-color-picker-container {
+            margin-bottom: 15px;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            padding: 8px 12px;
+            background: rgba(255, 255, 255, 0.05);
+            border-radius: 4px;
+        }
+
+        .layer-color-picker-label {
+            font-size: 11px;
+            color: #e2e8f0;
+            font-weight: 600;
+        }
+
+        .layer-color-input {
+            width: 40px;
+            height: 24px;
+            padding: 0;
+            border: 1px solid var(--border);
+            background: transparent;
+            cursor: pointer;
+        }
     </style>
 </head>
 
@@ -499,6 +525,10 @@
 
         <!-- SHP tab -->
         <div class="panel-body" id="shp-tab">
+            <div class="layer-color-picker-container">
+                <span class="layer-color-picker-label">Layer Color:</span>
+                <input type="color" id="shp-color-input" class="layer-color-input" value="#00FF41">
+            </div>
             <div class="panel-drop-zone" id="shp-drop-zone">
                 <div class="dz-icon">🗺️</div>
                 <p>Drop Shapefile components here</p>
@@ -510,6 +540,10 @@
 
         <!-- KML tab -->
         <div class="panel-body" id="kml-tab" style="display:none">
+            <div class="layer-color-picker-container">
+                <span class="layer-color-picker-label">Layer Color:</span>
+                <input type="color" id="kml-color-input" class="layer-color-input" value="#00BFFF">
+            </div>
             <div class="panel-drop-zone" id="kml-drop-zone">
                 <div class="dz-icon">📍</div>
                 <p>Drop KML or KMZ file here</p>
@@ -726,6 +760,13 @@
                 });
             }
 
+            function getProxiedUrl(url) {
+                if (url && url.includes('.blob.core.windows.net')) {
+                    return `/api/proxy-layer?url=${encodeURIComponent(url)}`;
+                }
+                return url;
+            }
+
             async function loadProjectLayers() {
                 if (!projectId) return;
                 try {
@@ -738,26 +779,15 @@
                     console.log(`[Layers] Found ${layers.length} layer(s) for project:`, projectId);
 
                     for (const layer of layers) {
-                        // Verify file exists before attempting load
-                        try {
-                            const check = await fetch(layer.url, { method: 'HEAD', cache: 'no-store' });
-                            if (!check.ok) {
-                                console.warn(`[Layers] Skipping missing layer: ${layer.url}`);
-                                continue;
-                            }
-                        } catch (e) {
-                            console.warn('[Layers] Failed to probe layer URL:', layer.url);
-                            continue;
-                        }
-
                         console.log(`[Layers] Auto-loading ${layer.type}:`, layer.name);
+                        const layerColor = layer.color || (layer.type === 'SHP' ? '#00FF41' : '#00BFFF');
                         if (layer.type === 'SHP') {
-                            await loadShapefileIntoScene(layer.url, layer.name);
+                            await loadShapefileIntoScene(layer.url, layer.name, layerColor);
                         } else if (layer.type === 'KML') {
                             try {
-                                const kmlRes = await fetch(layer.url);
+                                const kmlRes = await fetch(getProxiedUrl(layer.url));
                                 const kmlText = await kmlRes.text();
-                                await loadKMLIntoScene(kmlText, layer.name);
+                                await loadKMLIntoScene(kmlText, layer.name, layerColor);
                             } catch (err) { console.error('[Layers] KML auto-load failed', err); }
                         }
                     }
@@ -774,7 +804,7 @@
             }
 
             // ── Optimized SHP loader ─────────────────────────────
-            async function loadShapefileIntoScene(url, label) {
+            async function loadShapefileIntoScene(url, label, color = 0x00FF41) {
                 try {
                     const loader = new Potree.ShapefileLoader();
                     const pc = viewer.scene.pointclouds[0];
@@ -787,8 +817,12 @@
                     // Read .prj for CRS info
                     let shpCRS = null;
                     try {
-                        const prjUrl = url.replace(/\.shp$/i, '.prj');
-                        const prjRes = await fetch(prjUrl);
+                        // Correctly handle SAS tokens in URL by replacing extension before query string
+                        const urlObj = new URL(url, window.location.origin);
+                        urlObj.pathname = urlObj.pathname.replace(/\.shp$/i, '.prj');
+                        const prjUrl = urlObj.toString();
+                        
+                        const prjRes = await fetch(getProxiedUrl(prjUrl));
                         if (prjRes.ok) shpCRS = await prjRes.text();
                     } catch (e) { }
 
@@ -817,44 +851,24 @@
                     loader.transform = { forward: transformArray };
                     loader.defaultZ = groundZ;  // For 2D features without Z
                     
-                    const shp = await loader.load(url);
+                    const shp = await loader.load(url, color);
                     if (!shp.features?.length) throw new Error("No features found in shapefile");
-
-                    const layerGroup = new THREE.Group();
-                    layerGroup.name = `Layer: ${label}`;
-                    
-                    // ━━━ USE THE LOADER'S PROCESSED NODE DIRECTLY ━━━
-                    // The loader has already applied ALL transformations
-                    // We just add its geometries to our layer group
-                    if (shp.node && shp.node.children && shp.node.children.length > 0) {
-                        shp.node.children.forEach(child => {
-                            layerGroup.add(child);
-                        });
-                    }
 
                     const maxFeatures = shp.features.length;
                     console.log(`[Layers] Loaded ${maxFeatures} features for ${label}`);
 
-                    // Add to scene
-                    viewer.scene.scene.add(layerGroup);
+                    // ━━━ ADD THE GisLayer DIRECTLY ━━━
+                    const layerNode = shp.node;
+                    layerNode.name = label;
+                    viewer.scene.addMeasurement(layerNode);
 
-                    // ━━━ LAYER MEASUREMENT WRAPPER ━━━
-                    const layerMeasure = new Potree.Measure();
-                    layerMeasure.name = label;
-                    layerMeasure.showDistances = false;
-                    layerMeasure.showAngles = false;
-                    layerMeasure.showCoordinates = false;
-                    layerMeasure.showArea = false;
-                    layerMeasure.closed = false;
-                    layerMeasure.add(layerGroup);
-                    viewer.scene.addMeasurement(layerMeasure);
-
-                    window.loadedLayers.push({ type: 'SHP', label, node: layerMeasure, visual: layerGroup });
+                    window.loadedLayers.push({ type: 'SHP', label, node: layerNode, visual: layerNode });
                     updateLayerBadge();
+                    addLayerToList('SHP', label, layerNode);
 
                     // Viewport zoom to first layer
-                    if (window.loadedLayers.length === 1 && layerGroup.children.length) {
-                        const box = new THREE.Box3().setFromObject(layerGroup);
+                    if (window.loadedLayers.length === 1 && layerNode.children.length) {
+                        const box = new THREE.Box3().setFromObject(layerNode);
                         if (!box.isEmpty()) {
                             viewer.scene.view.lookAt(box.getCenter(new THREE.Vector3()));
                         }
@@ -878,7 +892,7 @@
             }
 
             // ── Optimized KML loader ───────────────────────────────
-            async function loadKMLIntoScene(text, label) {
+            async function loadKMLIntoScene(text, label, color = 0x00BFFF) {
                 try {
                     const parser = new DOMParser();
                     const doc = parser.parseFromString(text, 'text/xml');
@@ -921,9 +935,10 @@
                             }
                         }
                     }
-
-                    const lineColor = 0x00BFFF;
-                    const pointColor = 0x00BFFF;
+                    
+                    const threeColor = new THREE.Color(color);
+                    const lineColor = threeColor;
+                    const pointColor = threeColor;
                     const maxAnnos = 500;
 
                     let lineVertices = [];
@@ -1031,21 +1046,20 @@
                         layerGroup.add(lineObj);
                     }
 
-                    // --- Correct Format: Using Potree.Measure as the Layer Container ---
-                    const layerMeasure = new Potree.Measure();
-                    layerMeasure.name = label;
-                    layerMeasure.showDistances = false;
-                    layerMeasure.showAngles = false;
-                    layerMeasure.showCoordinates = false;
-                    layerMeasure.showArea = false;
-                    layerMeasure.closed = false;
+                    // --- Correct Format: Using GisLayer directly ---
+                    const layerNode = new Potree.GisLayer(label);
+                    layerNode.color = color;
+                    
+                    // Move children from layerGroup to layerNode
+                    while(layerGroup.children.length > 0) {
+                        layerNode.add(layerGroup.children[0]);
+                    }
+                    
+                    viewer.scene.addMeasurement(layerNode);
 
-                    // Add the batched visual group to the measure object
-                    layerMeasure.add(layerGroup);
-                    viewer.scene.addMeasurement(layerMeasure);
-
-                    window.loadedLayers.push({ type: 'KML', label, node: layerMeasure, visual: layerGroup });
+                    window.loadedLayers.push({ type: 'KML', label, node: layerNode, visual: layerNode });
                     updateLayerBadge();
+                    addLayerToList('KML', label, layerNode);
                     return true;
                 } catch (e) {
                     console.error('KML load error:', e);
@@ -1156,6 +1170,10 @@
                 const formData = new FormData();
                 formData.append('projectId', projectId || 'standalone');
 
+                const colorInputId = type === 'SHP' ? 'shp-color-input' : 'kml-color-input';
+                const selectedColor = document.getElementById(colorInputId).value;
+                formData.append('color', selectedColor);
+
                 // Append all files and check for SHP components
                 let hasSHP = false, hasDBF = false, hasSHX = false;
                 for (let i = 0; i < files.length; i++) {
@@ -1201,21 +1219,21 @@
                     let ok = false;
                     if (result.primaryUrl) {
                         if (type === 'SHP') {
-                            // Strip the .shp extension for a cleaner layer label in the sidebar
-                            const shpLabel = result.primaryUrl.split('/').pop().replace(/\.shp$/i, '');
+                            // Strip SAS token and extension for a cleaner layer label
+                            const shpLabel = result.primaryUrl.split('?')[0].split('/').pop().replace(/\.shp$/i, '');
                             console.log('Loading Shapefile:', result.primaryUrl, '→ label:', shpLabel);
                             try {
-                                ok = await loadShapefileIntoScene(result.primaryUrl, shpLabel);
+                                ok = await loadShapefileIntoScene(result.primaryUrl, shpLabel, result.color);
                             } catch (shpErr) {
                                 console.error('[SHP] loadShapefileIntoScene threw:', shpErr);
                                 throw new Error('Shapefile parse error: ' + shpErr.message);
                             }
                         } else if (type === 'KML') {
-                            const kmlLabel = result.primaryUrl.split('/').pop().replace(/\.kml$/i, '');
+                            const kmlLabel = result.primaryUrl.split('?')[0].split('/').pop().replace(/\.kml$/i, '');
                             console.log('Loading KML:', result.primaryUrl, '→ label:', kmlLabel);
-                            const kmlRes = await fetch(result.primaryUrl);
+                            const kmlRes = await fetch(getProxiedUrl(result.primaryUrl));
                             const kmlText = await kmlRes.text();
-                            ok = await loadKMLIntoScene(kmlText, kmlLabel);
+                            ok = await loadKMLIntoScene(kmlText, kmlLabel, result.color);
                         }
                     } else {
                         console.error('No primary file (.shp or .kml) found in server response');

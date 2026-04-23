@@ -55,24 +55,22 @@ export class GisPanel {
 			`);
 		}
 
-		// 2) Polygon Color
-		if (gisLayer.polygonMesh) {
-			let savedColor = localStorage.getItem(`Potree_GisLayer_${layerName}_polygonColor`);
+		// 2) Layer Color
+		if (gisLayer) {
+			let savedColor = localStorage.getItem(`Potree_GisLayer_${layerName}_color`);
 			if(savedColor !== null) {
-				gisLayer.polygonMesh.material.color.setHex(parseInt(savedColor, 10));
+				gisLayer.color = new THREE.Color(parseInt(savedColor, 10));
 			}
 
 			elSettings.append(`
 				<div style="margin: 10px 0;">
-					<span style="display:block; margin-bottom:5px;">Polygon Fill Color</span>
-					<input id="gis_polygon_color" />
+					<span style="display:block; margin-bottom:5px;">Layer Color</span>
+					<input id="gis_layer_color" />
 				</div>
 			`);
 		}
 
-		if (gisLayer.pointsMesh || gisLayer.polygonMesh) {
-			this.container.append(elSettings);
-		}
+		this.container.append(elSettings);
 
 		// Activate Slider
 		if (gisLayer.pointsMesh) {
@@ -89,24 +87,30 @@ export class GisPanel {
 		}
 
 		// Activate Color Picker
-		if (gisLayer.polygonMesh) {
-			elSettings.find("#gis_polygon_color").spectrum({
+		if (gisLayer) {
+			const colorInput = elSettings.find("#gis_layer_color");
+			colorInput.spectrum({
 				flat: false,
 				showInput: true,
 				preferredFormat: 'rgb',
 				cancelText: '',
 				chooseText: 'Apply',
-				color: `#${gisLayer.polygonMesh.material.color.getHexString()}`,
+				color: `#${gisLayer.color.getHexString()}`,
 				move: color => {
 					let cRGB = color.toRgb();
-					gisLayer.polygonMesh.material.color.setRGB(cRGB.r / 255, cRGB.g / 255, cRGB.b / 255);
-					localStorage.setItem(`Potree_GisLayer_${layerName}_polygonColor`, gisLayer.polygonMesh.material.color.getHex());
+					let tc = new THREE.Color().setRGB(cRGB.r / 255, cRGB.g / 255, cRGB.b / 255);
+					gisLayer.color = tc;
 				},
 				change: color => {
 					let cRGB = color.toRgb();
-					gisLayer.polygonMesh.material.color.setRGB(cRGB.r / 255, cRGB.g / 255, cRGB.b / 255);
-					localStorage.setItem(`Potree_GisLayer_${layerName}_polygonColor`, gisLayer.polygonMesh.material.color.getHex());
+					let tc = new THREE.Color().setRGB(cRGB.r / 255, cRGB.g / 255, cRGB.b / 255);
+					gisLayer.color = tc;
+					localStorage.setItem(`Potree_GisLayer_${layerName}_color`, gisLayer.color.getHex());
 				}
+			});
+
+			this.propertiesPanel.addVolatileListener(gisLayer, "color_changed", (e) => {
+				colorInput.spectrum('set', `#${e.color.getHexString()}`);
 			});
 		}
 

@@ -103,6 +103,27 @@ export class GisLayer extends THREE.Object3D {
 				}
 			}
 		});
+
+		this._color = new THREE.Color(0x00FF41);
+	}
+
+	get color() {
+		return this._color;
+	}
+
+	set color(value) {
+		this._color = new THREE.Color(value);
+		
+		this.traverse(child => {
+			if (child.material && child.material.color) {
+				child.material.color.copy(this._color);
+			}
+		});
+
+		this.dispatchEvent({
+			type: "color_changed",
+			color: this._color
+		});
 	}
 
 	raycast(raycaster, intersects) {
