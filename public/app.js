@@ -2,6 +2,17 @@
 let currentData = { uploads: [], examples: [] };
 let isCloudEnabled = false;
 
+// Helper: safely parse a fetch response as JSON, guarding against HTML fallback
+async function safeJsonFetch(url, options) {
+    const res = await fetch(url, options);
+    if (!res.ok) throw new Error(`HTTP ${res.status} ${res.statusText}`);
+    const ct = res.headers.get('content-type') || '';
+    if (!ct.includes('application/json')) {
+        throw new Error(`Expected JSON but received ${ct || 'unknown content-type'} (possible HTML fallback)`);
+    }
+    return res.json();
+}
+
 // Storage Destination selector setup
 const storageGroup = document.getElementById('storage-destination-group');
 const localLabel = document.getElementById('local-storage-label');
@@ -17,8 +28,7 @@ storageRadios.forEach(radio => {
 
 async function checkConfig() {
     try {
-        const res = await fetch('/api/config');
-        const config = await res.json();
+        const config = await safeJsonFetch('/api/config');
         isCloudEnabled = config.isCloudEnabled;
         if (isCloudEnabled && storageGroup) {
             storageGroup.style.display = 'flex';
@@ -253,8 +263,7 @@ function pollConversion(jobId, projectId, bar, statusText, pctText) {
 // ---- Data Fetching -----------------------------------------------------------
 async function fetchData() {
     try {
-        const res = await fetch('/api/list');
-        const data = await res.json();
+        const data = await safeJsonFetch('/api/list');
         currentData = data;
         renderDashboard();
         setupDeleteButtons();

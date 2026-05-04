@@ -10,6 +10,11 @@
 /build
 /dist
 
+# Vercel build artifacts (generated during deploy)
+public/build/
+public/libs/
+public/resources/
+
 # Dynamic Data (High Priority for Azure)
 # Avoid committing massive LiDAR point clouds or uploaded ZIPs
 data/converted/
