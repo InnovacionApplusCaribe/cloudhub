@@ -728,7 +728,8 @@
                     let found = false;
                     for (let p of possiblePaths) {
                         try {
-                            let okRes = await fetch(p, { method: 'HEAD' });
+                            // Use the proxy for probing to avoid CORS issues
+                            let okRes = await fetch(getProxiedUrl(p), { method: 'HEAD' });
                             if (okRes.ok) {
                                 targetUrl = p;
                                 found = true;
@@ -745,7 +746,9 @@
                 }
 
                 document.getElementById('loading-detail').textContent = 'Rendering 3D scene...';
-                Potree.loadPointCloud(targetUrl, "Point Cloud", e => {
+                // Pass the URL to Potree. Our XHRFactory modification will handle internal proxying
+                // but we proxy the entry point here as well for immediate bypass.
+                Potree.loadPointCloud(getProxiedUrl(targetUrl), "Point Cloud", e => {
                     const pc = e.pointcloud;
                     const mat = pc.material;
                     viewer.scene.addPointCloud(pc);
@@ -762,7 +765,8 @@
 
             function getProxiedUrl(url) {
                 if (url && url.includes('.blob.core.windows.net')) {
-                    return `/api/proxy-layer?url=${encodeURIComponent(url)}`;
+                    // Use the more robust proxy-blob API
+                    return `/api/proxy-blob?url=${encodeURIComponent(url)}`;
                 }
                 return url;
             }
