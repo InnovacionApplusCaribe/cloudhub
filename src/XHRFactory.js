@@ -12,7 +12,7 @@ const XHRFactory = {
 	 * endpoint, bypassing browser CORS restrictions entirely.
 	 */
 	proxyAzureUrl: function (url) {
-		if (url && url.includes('.blob.core.windows.net')) {
+		if (url && url.includes('.blob.core.windows.net') && !url.includes('/api/proxy-blob')) {
 			return '/api/proxy-blob?url=' + encodeURIComponent(url);
 		}
 		return url;

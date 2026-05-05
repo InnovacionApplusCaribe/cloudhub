@@ -748,7 +748,7 @@
                 document.getElementById('loading-detail').textContent = 'Rendering 3D scene...';
                 // Pass the URL to Potree. Our XHRFactory modification will handle internal proxying
                 // but we proxy the entry point here as well for immediate bypass.
-                Potree.loadPointCloud(getProxiedUrl(targetUrl), "Point Cloud", e => {
+                Potree.loadPointCloud(targetUrl, "Point Cloud", e => {
                     const pc = e.pointcloud;
                     const mat = pc.material;
                     viewer.scene.addPointCloud(pc);
@@ -764,7 +764,7 @@
             }
 
             function getProxiedUrl(url) {
-                if (url && url.includes('.blob.core.windows.net')) {
+                if (url && url.includes('.blob.core.windows.net') && !url.includes('/api/proxy-blob')) {
                     // Use the more robust proxy-blob API
                     return `/api/proxy-blob?url=${encodeURIComponent(url)}`;
                 }
