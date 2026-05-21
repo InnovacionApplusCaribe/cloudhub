@@ -49,6 +49,7 @@ export class AnnotationPanel{
 
 		this.elCopyPosition = this.elContent.find("img[name=copyPosition]");
 		this.elCopyPosition.click( () => {
+			if (!this.annotation.position) return;
 			let pos = this.annotation.position.toArray();
 			let msg = pos.map(c => c.toFixed(3)).join(", ");
 			Utils.clipboardCopy(msg);
@@ -78,7 +79,7 @@ export class AnnotationPanel{
 	update(){
 		const {annotation, elContent, elTitle, elDescription} = this;
 
-		let pos = annotation.position.toArray().map(c => Utils.addCommas(c.toFixed(3)));
+		let pos = annotation.position ? annotation.position.toArray().map(c => Utils.addCommas(c.toFixed(3))) : ["-", "-", "-"];
 		elContent.find("#annotation_position_x").html(pos[0]);
 		elContent.find("#annotation_position_y").html(pos[1]);
 		elContent.find("#annotation_position_z").html(pos[2]);

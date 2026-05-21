@@ -440,11 +440,16 @@ router.get('/list', async (req, res) => {
             }));
         }
 
+        // Deduplicate: If a project exists in both local and cloud, the cloud version wins.
+        // This is like a "Super Team" where the cloud players are the starters!
+        const cloudProjectNames = new Set(cloud.map(project => project.name));
+        const uniqueLocalProjects = local.filter(project => !cloudProjectNames.has(project.name));
+
         const response = {
-            uploads: [...local, ...cloud],
+            uploads: [...uniqueLocalProjects, ...cloud],
             examples,
             cloudProjectsCount: cloud.length,
-            localProjectsCount: local.length,
+            localProjectsCount: uniqueLocalProjects.length,
             cached: false,
             timestamp: now
         };
@@ -791,12 +796,63 @@ router.get('/projects/:projectId', (req, res) => {
  * GET /api/proxy-layer
  * Proxies requests to Azure Blob Storage to bypass browser CORS restrictions
  */
-router.get('/proxy-layer', async (req, res) => {
-    const targetUrl = req.query.url;
-    if (!targetUrl) return res.status(400).json({ error: 'URL parameter required' });
+/**
+ * GET /api/proxy-blob
+ * This is a "Secret Tunnel" that lets us grab data from the big Azure cloud
+ * and bring it to our viewer without the browser getting scared (CORS).
+ * It works just like the one we have in the Vercel production server!
+ */
+router.get('/proxy-blob', async (req, res) => {
+    // Express auto-decodes %2B -> + in req.query, but Azure SAS tokens require %2B.
+    // A bare + in a query string is treated as a space by Azure -> 403 signature mismatch.
+    // Re-encode + back to %2B in the query string portion only.
+    let cloudUrl = req.query.url || '';
+    if (!cloudUrl) {
+        return res.status(400).json({ error: 'I need a URL to fetch data from the cloud!' });
+    }
+    const _qb = cloudUrl.indexOf('?');
+    if (_qb >= 0) cloudUrl = cloudUrl.slice(0, _qb + 1) + cloudUrl.slice(_qb + 1).replace(/\+/g, '%2B');
 
     try {
-        // Use Node 18 fetch
+        // Go fetch the data from the cloud
+        const cloudResponse = await fetch(cloudUrl);
+        if (!cloudResponse.ok) {
+            console.error(`[Cloud Tunnel] The cloud said NO (${cloudResponse.status}) for: ${cloudUrl}`);
+            return res.status(cloudResponse.status).send(cloudResponse.statusText);
+        }
+
+        // Copy the important "Stickers" (Headers) from the cloud response
+        const dataType = cloudResponse.headers.get('content-type');
+        if (dataType) res.setHeader('Content-Type', dataType);
+
+        const dataSize = cloudResponse.headers.get('content-length');
+        if (dataSize) res.setHeader('Content-Length', dataSize);
+
+        // Tell everyone it's okay to share this data
+        res.setHeader('Access-Control-Allow-Origin', '*');
+
+        // Remember this data for 5 minutes so we don't have to go back to the cloud too often
+        res.setHeader('Cache-Control', 'public, max-age=300');
+
+        // Turn the cloud data into a "Data Box" (Buffer) and send it home
+        const dataBuffer = Buffer.from(await cloudResponse.arrayBuffer());
+        res.status(200).send(dataBuffer);
+    } catch (err) {
+        console.error('[Cloud Tunnel] Oh no, the tunnel broke:', err.message);
+        res.status(500).json({ error: 'The tunnel to the cloud is broken right now.' });
+    }
+});
+
+router.get('/proxy-layer', async (req, res) => {
+    // Express auto-decodes %2B -> + in req.query, but Azure SAS tokens require %2B.
+    // A bare + in a query string is treated as a space by Azure -> 403 signature mismatch.
+    // Re-encode + back to %2B in the query string portion only.
+    let targetUrl = req.query.url || '';
+    if (!targetUrl) return res.status(400).json({ error: 'URL parameter required' });
+    const _qt = targetUrl.indexOf('?');
+    if (_qt >= 0) targetUrl = targetUrl.slice(0, _qt + 1) + targetUrl.slice(_qt + 1).replace(/\+/g, '%2B');
+
+    try {
         const response = await fetch(targetUrl);
         if (!response.ok) {
             console.error(`[Proxy] Target returned ${response.status}: ${targetUrl}`);
@@ -806,31 +862,16 @@ router.get('/proxy-layer', async (req, res) => {
         // Pass through essential headers
         const contentType = response.headers.get('content-type');
         if (contentType) res.setHeader('Content-Type', contentType);
-        
+
         const contentLength = response.headers.get('content-length');
         if (contentLength) res.setHeader('Content-Length', contentLength);
 
-        // Stream the body
-        const body = response.body;
-        if (body) {
-            const reader = body.getReader();
-            const stream = new ReadableStream({
-                async start(controller) {
-                    while (true) {
-                        const { done, value } = await reader.read();
-                        if (done) break;
-                        controller.enqueue(value);
-                    }
-                    controller.close();
-                }
-            });
-            
-            // Convert web stream to Node stream for res.pipe equivalent or just send
-            const nodeStream = require('stream').Readable.from(stream);
-            nodeStream.pipe(res);
-        } else {
-            res.end();
-        }
+        res.setHeader('Access-Control-Allow-Origin', '*');
+        res.setHeader('Cache-Control', 'public, max-age=300');
+
+        // Buffer the full response and send — matches proxy-blob approach (more reliable in Node.js)
+        const buffer = Buffer.from(await response.arrayBuffer());
+        res.status(200).send(buffer);
     } catch (err) {
         console.error('[Proxy] Error:', err.message);
         res.status(500).json({ error: err.message });

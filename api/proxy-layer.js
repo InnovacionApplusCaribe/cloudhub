@@ -1,8 +1,13 @@
 // Vercel Serverless Function: GET /api/proxy-layer
 // Proxies requests to Azure Blob Storage to bypass browser CORS restrictions.
 module.exports = async (req, res) => {
-    const targetUrl = req.query.url;
+    // Express/Vercel auto-decodes %2B -> + in req.query, but Azure SAS tokens require %2B.
+    // A bare + in a query string is treated as a space by Azure -> 403 signature mismatch.
+    // Re-encode + back to %2B in the query string portion only.
+    let targetUrl = req.query.url || '';
     if (!targetUrl) return res.status(400).json({ error: 'URL parameter required' });
+    const _q = targetUrl.indexOf('?');
+    if (_q >= 0) targetUrl = targetUrl.slice(0, _q + 1) + targetUrl.slice(_q + 1).replace(/\+/g, '%2B');
 
     try {
         const response = await fetch(targetUrl);

@@ -10,8 +10,13 @@ export class ShapefileLoader {
 		this.defaultZ = null;
 	}
 
-	async load(path, color = 0x00FF41) {
-		const features = await this.loadShapefileFeatures(path);
+	async load(path, color = 0x00FF41, onProgress = null) {
+		const reportProgress = (msg, percent) => {
+			if (onProgress) onProgress(msg, percent);
+		};
+
+		reportProgress("Downloading shapefile...", 0);
+		const features = await this.loadShapefileFeatures(path, reportProgress);
 		const node = new GisLayer("Shapefile Layer");
 		node.color = color;
 		const threeColor = new THREE.Color(color);
@@ -47,6 +52,7 @@ export class ShapefileLoader {
 
 		const pointPositions = [];
 		const linePositions = [];
+		const polygonOutlinePositions = [];
 		const shapesArray = [];
 
 		if (this.defaultZ === null) {
@@ -54,7 +60,20 @@ export class ShapefileLoader {
 		}
 		const defaultZ = this.defaultZ;
 
-		for (const feature of features) {
+		const totalFeatures = features.length;
+		let processedFeatures = 0;
+		let lastYieldTime = performance.now();
+
+			for (const feature of features) {
+				processedFeatures++;
+				
+				// Yield more frequently to keep UI responsive
+				if (performance.now() - lastYieldTime > 20) {
+					reportProgress(`Processing feature geometries (${processedFeatures}/${totalFeatures})...`, (processedFeatures / totalFeatures) * 50);
+					await new Promise(resolve => setTimeout(resolve, 0));
+					lastYieldTime = performance.now();
+				}
+
 			const geometry = feature.geometry;
 			if (!geometry) continue;
 
@@ -92,8 +111,10 @@ export class ShapefileLoader {
 						const nextY = nextP[1] - this.offset.y;
 						const nextZ = (nextP[2] !== undefined ? nextP[2] : nextZInput) - this.offset.z;
 
-						linePositions.push(x, y, z);
-						linePositions.push(nextX, nextY, nextZ);
+						if (!isNaN(x) && !isNaN(y) && !isNaN(z) && !isNaN(nextX) && !isNaN(nextY) && !isNaN(nextZ)) {
+							linePositions.push(x, y, z);
+							linePositions.push(nextX, nextY, nextZ);
+						}
 					}
 				}
 			} else if (geometry.type === "Polygon" || geometry.type === "MultiPolygon") {
@@ -122,6 +143,12 @@ export class ShapefileLoader {
 
 						if (i === 0) shape.moveTo(x, y);
 						else shape.lineTo(x, y);
+
+						if (i > 0) {
+							const prev = outerRing[i - 1];
+							polygonOutlinePositions.push(prev[0], prev[1], prev[2]);
+							polygonOutlinePositions.push(x, y, z);
+						}
 					}
 
 					for (let r = 1; r < polygonCoords.length; r++) {
@@ -139,6 +166,12 @@ export class ShapefileLoader {
 
 							if (i === 0) hole.moveTo(x, y);
 							else hole.lineTo(x, y);
+
+							if (i > 0) {
+								const prev = holeRing[i - 1];
+								polygonOutlinePositions.push(prev[0], prev[1], prev[2]);
+								polygonOutlinePositions.push(x, y, z);
+							}
 						}
 						shape.holes.push(hole);
 					}
@@ -153,6 +186,13 @@ export class ShapefileLoader {
 				} else {
 					for (const polyCoords of geometry.coordinates) {
 						parsePolygon(polyCoords);
+						
+						// Yield within MultiPolygon for very complex features
+						if (performance.now() - lastYieldTime > 20) {
+							reportProgress(`Processing MultiPolygon (${processedFeatures}/${totalFeatures})...`, (processedFeatures / totalFeatures) * 50);
+							await new Promise(resolve => setTimeout(resolve, 0));
+							lastYieldTime = performance.now();
+						}
 					}
 				}
 			}
@@ -172,13 +212,30 @@ export class ShapefileLoader {
 				depthWrite: false
 			});
 
-			// Create individual sphere meshes for each point
-			for (let i = 0; i < pointPositions.length; i += 3) {
-				const sphere = new THREE.Mesh(sphereGeometry, pointMaterial);
-				sphere.position.set(pointPositions[i], pointPositions[i + 1], pointPositions[i + 2]);
-				sphere.scale.set(1, 1, 1);
-				pointGroup.add(sphere);
+			// Use InstancedMesh for high-performance point markers (Issue 1 cleanup)
+			const pointCount = pointPositions.length / 3;
+			const instancedMesh = new THREE.InstancedMesh(sphereGeometry, pointMaterial, pointCount);
+			const dummy = new THREE.Object3D();
+
+			for (let i = 0; i < pointCount; i++) {
+				const px = pointPositions[i * 3];
+				const py = pointPositions[i * 3 + 1];
+				const pz = pointPositions[i * 3 + 2];
+				
+				if (isNaN(px) || isNaN(py) || isNaN(pz)) continue;
+				
+				dummy.position.set(px, py, pz);
+				dummy.updateMatrix();
+				instancedMesh.setMatrixAt(i, dummy.matrix);
+				
+				// Yield during instanced mesh setup
+				if (performance.now() - lastYieldTime > 20) {
+					await new Promise(resolve => setTimeout(resolve, 0));
+					lastYieldTime = performance.now();
+				}
 			}
+			instancedMesh.instanceMatrix.needsUpdate = true;
+			pointGroup.add(instancedMesh);
 
 			node.pointsMesh = pointGroup;
 			node.add(pointGroup);
@@ -233,34 +290,108 @@ export class ShapefileLoader {
 				opacity: 1.0
 			});
 
-			// Create mesh for each shape with both fill and outline
-			for (const shape of shapesArray) {
+			// Create batch geometries for fill and outlines
+			const fillGeometries = [];
+			
+			// ━━━ PHASE 1: BATCH GEOMETRY GENERATION ━━━
+			for (let i = 0; i < shapesArray.length; i++) {
+				const shape = shapesArray[i];
 				const geometry = new GeometryClass(shape);
 				const shapeZ = shape.zOffset !== undefined ? shape.zOffset : 0;
 
 				// Set Z coordinate for filled mesh
 				if (geometry.attributes && geometry.attributes.position) {
 					const posAttr = geometry.attributes.position;
-					for (let i = 0; i < posAttr.count; i++) {
-						posAttr.setZ(i, shapeZ);
-					}
-				} else if (geometry.vertices) {
-					for (let i = 0; i < geometry.vertices.length; i++) {
-						geometry.vertices[i].z = shapeZ;
+					for (let j = 0; j < posAttr.count; j++) {
+						posAttr.setZ(j, shapeZ);
 					}
 				}
 
-				// Create filled mesh
-				const fillMesh = new THREE.Mesh(geometry, fillMaterial);
+				fillGeometries.push(geometry);
+
+				// Yield based on time to prevent any heavy polygon from freezing
+				if (performance.now() - lastYieldTime > 30) {
+					reportProgress(`Building meshes (${i}/${shapesArray.length})...`, 50 + (i / shapesArray.length) * 50);
+					await new Promise(resolve => setTimeout(resolve, 0));
+					lastYieldTime = performance.now();
+				}
+			}
+
+			if (fillGeometries.length > 0) {
+				// Helper to merge geometries asynchronously to prevent UI freeze
+				const mergeGeometriesAsync = async (geos) => {
+					const merged = new THREE.BufferGeometry();
+					let totalVertices = 0;
+					let totalIndices = 0;
+					
+					for (const g of geos) {
+						if (!g.attributes || !g.attributes.position) continue;
+						totalVertices += g.attributes.position.count;
+						if (g.index) totalIndices += g.index.count;
+					}
+
+					if (totalVertices === 0) return merged;
+
+					const positions = new Float32Array(totalVertices * 3);
+					const indices = totalVertices > 65535 ? new Uint32Array(totalIndices) : new Uint16Array(totalIndices);
+					
+					let vOffset = 0;
+					let iOffset = 0;
+					let mergeStartTime = performance.now();
+					
+					for (let k = 0; k < geos.length; k++) {
+						const g = geos[k];
+						if (!g.attributes || !g.attributes.position) continue;
+						
+						positions.set(g.attributes.position.array, vOffset * 3);
+						
+						if (g.index) {
+							const indexArray = g.index.array;
+							const indexCount = g.index.count;
+							for (let i = 0; i < indexCount; i++) {
+								indices[iOffset + i] = indexArray[i] + vOffset;
+							}
+							iOffset += indexCount;
+						}
+						
+						vOffset += g.attributes.position.count;
+						g.dispose();
+
+						// Yield during merge to keep main thread alive
+						if (performance.now() - mergeStartTime > 20) {
+							reportProgress(`Merging layer geometries (${k}/${geos.length})...`, 90 + (k / geos.length) * 10);
+							await new Promise(resolve => setTimeout(resolve, 0));
+							mergeStartTime = performance.now();
+						}
+					}
+
+					merged.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+					if (totalIndices > 0) merged.setIndex(new THREE.BufferAttribute(indices, 1));
+					
+					// Ensure bounding volumes are computed to avoid issues with near/far plane calculation
+					merged.computeBoundingBox();
+					merged.computeBoundingSphere();
+					
+					return merged;
+				};
+
+				const mergedFillGeom = await mergeGeometriesAsync(fillGeometries);
+				
+				// Create a single filled mesh for all polygons
+				const fillMesh = new THREE.Mesh(mergedFillGeom, fillMaterial);
 				fillMesh.renderOrder = 10;
 				polygonGroup.add(fillMesh);
 
-				// Create outline edges (separate geometry for better visibility)
-				const outlineGeometry = new THREE.EdgesGeometry(geometry, 0.1);
-				const outlineMesh = new THREE.LineSegments(outlineGeometry, outlineMaterial);
-				outlineMesh.position.copy(fillMesh.position);
-				outlineMesh.renderOrder = 11;  // Render on top of fill
-				polygonGroup.add(outlineMesh);
+				// Create a single outline mesh for all polygons directly from positions array
+				if (polygonOutlinePositions.length > 0) {
+					const outGeom = new THREE.BufferGeometry();
+					outGeom.setAttribute('position', new THREE.Float32BufferAttribute(polygonOutlinePositions, 3));
+					outGeom.computeBoundingBox();
+					outGeom.computeBoundingSphere();
+					const outlineMesh = new THREE.LineSegments(outGeom, outlineMaterial);
+					outlineMesh.renderOrder = 11;
+					polygonGroup.add(outlineMesh);
+				}
 			}
 
 			node.polygonMesh = polygonGroup;
@@ -275,7 +406,7 @@ export class ShapefileLoader {
 		};
 	}
 
-	async loadShapefileFeatures(file) {
+	async loadShapefileFeatures(file, reportProgress) {
 		let features = [];
 		
 		// To prevent the shapefile library from incorrectly appending extensions 
@@ -285,7 +416,10 @@ export class ShapefileLoader {
 
 		const getProxiedUrl = (url) => {
 			if (url && url.includes('.blob.core.windows.net')) {
-				return `/api/proxy-layer?url=${encodeURIComponent(url)}`;
+				// Decode first to normalize any already-encoded chars (e.g. %2F in SAS tokens)
+				// then re-encode cleanly — prevents double-encoding (%2F -> %252F) which
+				// breaks SAS signature validation on Azure and causes 404s.
+				return `/api/proxy-layer?url=${encodeURIComponent(decodeURIComponent(url))}`;
 			}
 			return url;
 		};
@@ -314,12 +448,20 @@ export class ShapefileLoader {
 
 		// Open with buffers directly
 		let source = await shapefile.open(shpBuffer, dbfBuffer);
+		let count = 0;
+		let lastYieldTime = performance.now();
 		while (true) {
 			let result = await source.read();
 			if (result.done) break;
 
 			if (result.value && result.value.type === 'Feature' && result.value.geometry !== undefined) {
 				features.push(result.value);
+				count++;
+				if (performance.now() - lastYieldTime > 20) {
+					if (reportProgress) reportProgress(`Reading features (${count})...`, null);
+					await new Promise(resolve => setTimeout(resolve, 0));
+					lastYieldTime = performance.now();
+				}
 			}
 		}
 		return features;

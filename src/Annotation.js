@@ -503,8 +503,8 @@ export class Annotation extends EventDispatcher {
 	}
 
 	hasView () {
-		let hasPosTargetView = this.cameraTarget.x != null;
-		hasPosTargetView = hasPosTargetView && this.cameraPosition.x != null;
+		let hasPosTargetView = this.cameraTarget && this.cameraTarget.x != null;
+		hasPosTargetView = hasPosTargetView && (this.cameraPosition && this.cameraPosition.x != null);
 
 		let hasRadiusView = this.radius !== undefined;
 

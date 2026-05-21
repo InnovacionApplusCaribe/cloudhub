@@ -590,6 +590,17 @@
                 </div>
                 <div id="feature-info-content"></div>
             </div>
+
+            <!-- Async Layer Loading Progress -->
+            <div id="async-layer-progress-container" style="position: absolute; bottom: 20px; right: 20px; z-index: 10000; background: rgba(0,0,0,0.85); padding: 12px; border-radius: 6px; border: 1px solid var(--accent); color: white; display: none; width: 300px; font-family: var(--font); box-shadow: 0 4px 12px rgba(0,0,0,0.5);">
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+                    <span id="async-layer-progress-text" style="font-size: 11px; font-weight: 600; color: #fff;">Loading features...</span>
+                    <span id="async-layer-progress-percent" style="font-size: 11px; color: var(--accent);">0%</span>
+                </div>
+                <div style="width: 100%; background: #333; height: 6px; border-radius: 3px; overflow: hidden;">
+                    <div id="async-layer-progress-bar" style="width: 0%; height: 100%; background: var(--accent); border-radius: 3px; transition: width 0.1s linear;"></div>
+                </div>
+            </div>
         </div>
 
         <script>
@@ -739,9 +750,34 @@
                     }
 
                     if (!found) {
-                        console.error("Could not locate any valid metadata.json or cloud.js in project directory.");
-                        document.getElementById('loading-detail').textContent = 'Error: Missing point cloud data.';
-                        return;
+                        // If we can't find the data on our own computer (Local), 
+                        // let's go look in the "Big Cloud Book" (API List) to see if it's stored in Azure!
+                        console.warn("I couldn't find the data here on the computer. Let me look in the Cloud Book...");
+                        document.getElementById('loading-detail').textContent = 'Looking for the data in the cloud...';
+
+                        try {
+                            // Ask the server for the list of all projects
+                            const listResponse = await fetch('/api/list');
+                            const listData = await listResponse.json();
+                            
+                            // Find the project that matches our ID
+                            const matchingProject = listData.uploads.find(project => project.name === projectId);
+                            
+                            // If we found it and it has an Azure "Home" (URL), use that!
+                            if (matchingProject && matchingProject.url && matchingProject.url.includes('.blob.core.windows.net')) {
+                                targetUrl = matchingProject.url;
+                                found = true;
+                                console.log("Success! I found the cloud home for this project:", targetUrl);
+                            }
+                        } catch (err) {
+                            console.error("Oh no, I couldn't read the Cloud Book:", err);
+                        }
+
+                        if (!found) {
+                            console.error("I looked everywhere but I can't find the data for this project.");
+                            document.getElementById('loading-detail').textContent = 'Error: I cannot find the 3D data.';
+                            return;
+                        }
                     }
                 }
 
@@ -765,8 +801,10 @@
 
             function getProxiedUrl(url) {
                 if (url && url.includes('.blob.core.windows.net') && !url.includes('/api/proxy-blob')) {
-                    // Use the more robust proxy-blob API
-                    return `/api/proxy-blob?url=${encodeURIComponent(url)}`;
+                    // Decode first to normalize any already-encoded chars (e.g. %2F in SAS tokens)
+                    // then re-encode cleanly — prevents double-encoding (%2F -> %252F) which
+                    // breaks SAS signature validation on Azure and causes 404s.
+                    return `/api/proxy-blob?url=${encodeURIComponent(decodeURIComponent(url))}`;
                 }
                 return url;
             }
@@ -821,7 +859,6 @@
                     // Read .prj for CRS info
                     let shpCRS = null;
                     try {
-                        // Correctly handle SAS tokens in URL by replacing extension before query string
                         const urlObj = new URL(url, window.location.origin);
                         urlObj.pathname = urlObj.pathname.replace(/\.shp$/i, '.prj');
                         const prjUrl = urlObj.toString();
@@ -832,14 +869,10 @@
 
                     const isWGS84 = !shpCRS || shpCRS.includes('GEOGCS["GCS_WGS_1984"') || shpCRS.includes('WGS 84');
 
-                    // ━━━ SINGLE TRANSFORMATION FUNCTION ━━━
-                    // This is the ONLY place where coordinates are transformed
-                    // It handles: CRS projection AND offset adjustment in one pass
                     const transformArray = (coord) => {
                         let [x, y, z] = coord;
                         let targetX = x, targetY = y, targetZ = (z !== undefined && z !== null) ? z : groundZ;
 
-                        // 1. Apply CRS projection if needed
                         if (isWGS84 && pcProj) {
                             proj4.defs("WGS84", "+proj=longlat +datum=WGS84 +no_defs");
                             proj4.defs("pointcloud", pcProj);
@@ -847,30 +880,123 @@
                             targetX = p[0]; targetY = p[1];
                         }
 
-                        // 2. Subtract offset to get to local scene space
                         return [targetX - offset.x, targetY - offset.y, targetZ - offset.z];
                     };
 
-                    // Set the loader's transform - this is applied INSIDE the loader
                     loader.transform = { forward: transformArray };
-                    loader.defaultZ = groundZ;  // For 2D features without Z
+                    loader.defaultZ = groundZ;
                     
-                    const shp = await loader.load(url, color);
+                    const progressContainer = document.getElementById('async-layer-progress-container');
+                    const progressText = document.getElementById('async-layer-progress-text');
+                    const progressBar = document.getElementById('async-layer-progress-bar');
+                    const progressPercent = document.getElementById('async-layer-progress-percent');
+                    
+                    if (progressContainer) progressContainer.style.display = 'block';
+
+                    const onProgress = (msg, percent) => {
+                        if (progressText) progressText.textContent = msg;
+                        if (percent !== null && percent !== undefined) {
+                            if (progressBar) progressBar.style.width = `${percent}%`;
+                            if (progressPercent) progressPercent.textContent = `${Math.round(percent)}%`;
+                        }
+                    };
+
+                    const shp = await loader.load(url, color, onProgress);
+                    
+                    if (progressContainer) progressContainer.style.display = 'none';
+
                     if (!shp.features?.length) throw new Error("No features found in shapefile");
 
-                    const maxFeatures = shp.features.length;
-                    console.log(`[Layers] Loaded ${maxFeatures} features for ${label}`);
+                    console.log(`[Layers] Loaded ${shp.features.length} features for ${label}`);
 
-                    // ━━━ ADD THE GisLayer DIRECTLY ━━━
                     const layerNode = shp.node;
                     layerNode.name = label;
                     viewer.scene.addMeasurement(layerNode);
 
+                    // ━━━ ADD ANNOTATIONS FOR EACH FEATURE (Optimized Async) ━━━
+                    const layerAnnotation = new Potree.Annotation({
+                        title: label,
+                        visible: false 
+                    });
+                    viewer.scene.annotations.add(layerAnnotation);
+
+                    const addAnnotationsAsync = async () => {
+                        const features = shp.features;
+                        const batchSize = 100;
+                        const totalFeatures = features.length;
+                        // ━━━ Get point cloud offset to convert local → absolute coordinates ━━━
+                        const shpOffset = offset.clone();
+
+                        for (let i = 0; i < totalFeatures; i += batchSize) {
+                            const chunk = features.slice(i, i + batchSize);
+                            
+                            for (const feature of chunk) {
+                                if (!feature.geometry) continue;
+                                
+                                const props = feature.properties || {};
+                                const geomType = feature.geometry.type;
+                                
+                                // User request: Extract ID for points, ID & Risk for polygons
+                                let nameParts = [];
+                                const idKey = Object.keys(props).find(k => k.toLowerCase() === "id");
+                                if (idKey) nameParts.push(`ID: ${props[idKey]}`);
+                                
+                                if (geomType.includes("Polygon")) {
+                                    const riskKey = Object.keys(props).find(k => k.toLowerCase().includes("risk"));
+                                    if (riskKey) nameParts.push(`Risk: ${props[riskKey]}`);
+                                }
+                                
+                                let name = nameParts.length > 0 ? nameParts.join(" | ") : (props.name || props.NAME || props.Name || props.id || props.ID || "Feature");
+                                
+                                let centroid = [0, 0, 0];
+                                let foundPosition = false;
+
+                                if (geomType === "Point") {
+                                    centroid = feature.geometry.coordinates;
+                                    foundPosition = true;
+                                } else if (geomType === "Polygon" || geomType === "MultiPolygon" || geomType === "LineString") {
+                                    const points = geomType === "LineString" ? feature.geometry.coordinates : (geomType === "Polygon" ? feature.geometry.coordinates[0] : feature.geometry.coordinates[0][0]);
+                                    
+                                    if (points && points.length > 0) {
+                                        let sumX = 0, sumY = 0, sumZ = 0;
+                                        for (const pt of points) {
+                                            sumX += pt[0];
+                                            sumY += pt[1];
+                                            sumZ += pt[2] || groundZ;
+                                        }
+                                        centroid = [sumX / points.length, sumY / points.length, sumZ / points.length];
+                                        foundPosition = true;
+                                    }
+                                }
+
+                                if (foundPosition) {
+                                    // ━━━ Convert annotation position from local → absolute by adding offset ━━━
+                                    // (Coordinates are stored as local by transformArray, but annotations need absolute for camera nav)
+                                    const absCentroid = new THREE.Vector3(centroid[0], centroid[1], centroid[2]);
+                                    absCentroid.add(shpOffset);
+                                    
+                                    const featureAnnotation = new Potree.Annotation({
+                                        position: absCentroid,
+                                        title: name.toString()
+                                    });
+                                    featureAnnotation.featureProps = props;
+                                    layerAnnotation.add(featureAnnotation);
+                                }
+                            }
+                            
+                            if (totalFeatures > batchSize) {
+                                await new Promise(resolve => setTimeout(resolve, 0));
+                            }
+                        }
+                    };
+
+                    addAnnotationsAsync();
+
+                    layerNode.annotationGroup = layerAnnotation;
                     window.loadedLayers.push({ type: 'SHP', label, node: layerNode, visual: layerNode });
                     updateLayerBadge();
                     addLayerToList('SHP', label, layerNode);
 
-                    // Viewport zoom to first layer
                     if (window.loadedLayers.length === 1 && layerNode.children.length) {
                         const box = new THREE.Box3().setFromObject(layerNode);
                         if (!box.isEmpty()) {
@@ -878,7 +1004,6 @@
                         }
                     }
                     
-                    console.log(`[Layers] Successfully added ${label} to scene`);
                     return true;
                 } catch (e) {
                     console.error('SHP load error:', e);
@@ -896,12 +1021,9 @@
             }
 
             // ── Optimized KML loader ───────────────────────────────
-            async function loadKMLIntoScene(text, label, color = 0x00BFFF) {
+            async function loadKMLIntoScene(textOrUrl, label, color = 0x00BFFF) {
                 try {
-                    const parser = new DOMParser();
-                    const doc = parser.parseFromString(text, 'text/xml');
-                    const placemarks = doc.querySelectorAll('Placemark');
-
+                    const loader = new Potree.KmlLoader();
                     const pc = viewer.scene.pointclouds[0];
                     if (!pc) throw new Error("Load a point cloud first to provide coordinate context.");
 
@@ -909,10 +1031,9 @@
                     const pcProj = pc.projection || "";
                     const groundZ = pc.tightBoundingBox ? pc.tightBoundingBox.min.z : offset.z;
 
-                    // Transformer for KML (Lon/Lat)
-                    const transform = (coord) => {
+                    const transformArray = (coord) => {
                         let [lon, lat, alt] = coord;
-                        let targetX = lon, targetY = lat, targetZ = alt !== undefined ? alt : (groundZ + offset.z);
+                        let targetX = lon, targetY = lat, targetZ = (alt !== undefined && alt !== null) ? alt : groundZ;
 
                         if (pcProj) {
                             proj4.defs("WGS84", "+proj=longlat +datum=WGS84 +no_defs");
@@ -921,145 +1042,104 @@
                             targetX = p[0]; targetY = p[1];
                         }
 
-                        return new THREE.Vector3(targetX - offset.x, targetY - offset.y, targetZ - offset.z);
+                        return [targetX, targetY, targetZ];
                     };
 
-                    const layerGroup = new THREE.Group();
-                    layerGroup.name = `KML: ${label}`;
-                    viewer.scene.scene.add(layerGroup);
+                    loader.transform = { forward: transformArray };
+                    loader.offset = offset.clone();
+                    loader.boundingBox = pc.boundingBox ? pc.boundingBox.clone() : null;
+                    loader.defaultZ = groundZ;
 
-                    // Determine an anchor for the KML root folder
-                    let anchorPos = [0, 0, 0];
-                    if (placemarks.length > 0) {
-                        const firstCoordEl = placemarks[0].querySelector('coordinates');
-                        if (firstCoordEl) {
-                            const raw = firstCoordEl.textContent.trim().split(/\s+/)[0].split(',');
-                            if (raw.length >= 2) {
-                                anchorPos = transform([parseFloat(raw[0]), parseFloat(raw[1]), raw[2] ? parseFloat(raw[2]) : undefined]);
-                            }
-                        }
-                    }
+                    const progressContainer = document.getElementById('async-layer-progress-container');
+                    const progressText = document.getElementById('async-layer-progress-text');
+                    const progressBar = document.getElementById('async-layer-progress-bar');
+                    const progressPercent = document.getElementById('async-layer-progress-percent');
                     
-                    const threeColor = new THREE.Color(color);
-                    const lineColor = threeColor;
-                    const pointColor = threeColor;
-                    const maxAnnos = 500;
+                    if (progressContainer) progressContainer.style.display = 'block';
 
-                    let lineVertices = [];
-                    let lineFeatureIndices = [];
-                    let pointVertices = [];
-                    let pointFeatureIndices = [];
-                    let kmlFeatures = [];
-
-                    placemarks.forEach((pm, featureIdx) => {
-                        const name = pm.querySelector('name')?.textContent || 'Unnamed';
-                        const desc = pm.querySelector('description')?.textContent || '';
-                        const props = { name, description: desc };
-                        kmlFeatures.push(props);
-
-                        // 1. Create Annotation (Limit)
-                        if (featureIdx < maxAnnos) {
-                            let annoPos = null;
-                            const firstPt = pm.querySelector('Point coordinates');
-                            const firstLine = pm.querySelector('LineString coordinates');
-
-                            if (firstPt) {
-                                const raw = firstPt.textContent.trim().split(',');
-                                if (raw.length >= 2) annoPos = transform([parseFloat(raw[0]), parseFloat(raw[1]), raw[2] ? parseFloat(raw[2]) : undefined]);
-                            } else if (firstLine) {
-                                const firstCoord = firstLine.textContent.trim().split(/\s+/)[0].split(',');
-                                if (firstCoord.length >= 2) annoPos = transform([parseFloat(firstCoord[0]), parseFloat(firstCoord[1]), firstCoord[2] ? parseFloat(firstCoord[2]) : undefined]);
-                            }
+                    const onProgress = (msg, percent) => {
+                        if (progressText) progressText.textContent = msg;
+                        if (percent !== null && percent !== undefined) {
+                            if (progressBar) progressBar.style.width = `${percent}%`;
+                            if (progressPercent) progressPercent.textContent = `${Math.round(percent)}%`;
                         }
+                    };
 
-                        // 2. Prepare Batched Geometry
-                        // Points
-                        pm.querySelectorAll('Point coordinates').forEach(cEl => {
-                            const raw = cEl.textContent.trim().split(',');
-                            if (raw.length < 2) return;
-                            const localPos = transform([parseFloat(raw[0]), parseFloat(raw[1]), raw[2] ? parseFloat(raw[2]) : undefined]);
-                            pointVertices.push(localPos);
-                            pointFeatureIndices.push(featureIdx);
-                        });
+                    let fileInput = textOrUrl;
+                    if (typeof textOrUrl === 'string' && !textOrUrl.startsWith('<?xml') && !textOrUrl.includes('<kml')) {
+                        // It is a URL
+                        fileInput = textOrUrl;
+                    } else {
+                        // It is XML text, convert to a Blob so load can read it
+                        fileInput = new Blob([textOrUrl], { type: 'text/xml' });
+                    }
 
-                        // Lines
-                        pm.querySelectorAll('LineString coordinates').forEach(cEl => {
-                            const coords = cEl.textContent.trim().split(/\s+/).map(s => {
-                                const p = s.split(',');
-                                return transform([parseFloat(p[0]), parseFloat(p[1]), p[2] ? parseFloat(p[2]) : undefined]);
-                            });
+                    const kmlResult = await loader.load(fileInput, color, onProgress);
+                    
+                    if (progressContainer) progressContainer.style.display = 'none';
 
-                            if (coords.length > 1) {
-                                for (let j = 0; j < coords.length - 1; j++) {
-                                    lineVertices.push(coords[j], coords[j + 1]);
-                                    lineFeatureIndices.push(featureIdx, featureIdx);
-                                }
-                            }
-                        });
+                    if (!kmlResult.features?.length) throw new Error("No features found in KML file");
+
+                    console.log(`[Layers] Loaded ${kmlResult.features.length} features for ${label}`);
+
+                    const layerNode = kmlResult.node;
+                    layerNode.name = label;
+                    viewer.scene.addMeasurement(layerNode);
+
+                    // ━━━ ADD ANNOTATIONS FOR EACH FEATURE (Optimized Async) ━━━
+                    const layerAnnotation = new Potree.Annotation({
+                        title: label,
+                        visible: false 
                     });
 
-                    // Finalize Visual Objects with Enhanced Visualization
-
-                    // ━━━ CREATE POINT MARKERS (3D Spheres like Measurements tool) ━━━
-                    if (pointVertices.length > 0) {
-                        const pointGroup = new THREE.Group();
-                        pointGroup.name = "KML Points";
-                        
-                        const sphereGeometry = new THREE.SphereGeometry(0.8, 12, 12);
-                        const pointMat = new THREE.MeshLambertMaterial({ 
-                            color: pointColor, 
-                            depthTest: false,
-                            depthWrite: false
-                        });
-                        
-                        // Create individual sphere for each point
-                        pointVertices.forEach((pos, idx) => {
-                            const sphere = new THREE.Mesh(sphereGeometry, pointMat);
-                            sphere.position.copy(pos);
-                            sphere.userData = { 
-                                featureIndex: pointFeatureIndices[idx],
-                                layerLabel: label
-                            };
-                            pointGroup.add(sphere);
-                        });
-                        
-                        pointGroup.userData = { features: kmlFeatures, featureIndices: pointFeatureIndices, layerLabel: label };
-                        pointGroup.isGISLayer = true;
-                        layerGroup.add(pointGroup);
-                    }
-
-                    // ━━━ CREATE LINES WITH ENHANCED STYLING ━━━
-                    if (lineVertices.length > 0) {
-                        const lineGeom = new THREE.BufferGeometry().setFromPoints(lineVertices);
-                        lineGeom.computeBoundingSphere();
-                        lineGeom.computeBoundingBox();
-                        
-                        const lineMat = new THREE.LineBasicMaterial({ 
-                            color: lineColor, 
-                            linewidth: 2,
-                            depthTest: false,
-                            depthWrite: false,
-                            transparent: true,
-                            opacity: 0.95
-                        });
-                        
-                        const lineObj = new THREE.LineSegments(lineGeom, lineMat);
-                        lineObj.frustumCulled = false;
-                        lineObj.userData = { features: kmlFeatures, featureIndices: lineFeatureIndices, layerLabel: label };
-                        lineObj.isGISLayer = true;
-                        layerGroup.add(lineObj);
-                    }
-
-                    // --- Correct Format: Using GisLayer directly ---
-                    const layerNode = new Potree.GisLayer(label);
-                    layerNode.color = color;
+                    const maxAnnos = 500;
+                    // ━━━ Get point cloud offset to convert local → absolute coordinates ━━━
+                    const pcOffset = pc.pcoGeometry ? pc.pcoGeometry.offset.clone() : new THREE.Vector3(0, 0, 0);
                     
-                    // Move children from layerGroup to layerNode
-                    while(layerGroup.children.length > 0) {
-                        layerNode.add(layerGroup.children[0]);
-                    }
-                    
-                    viewer.scene.addMeasurement(layerNode);
+                    kmlResult.features.forEach((feature, idx) => {
+                        if (idx >= maxAnnos) return;
+                        
+                        const props = feature.properties || {};
+                        const name = props.name || `Feature ${idx + 1}`;
+                        
+                        let annoPos = null;
+                        const geom = feature.geometry;
+                        if (geom) {
+                            if (geom.type === "Point") {
+                                annoPos = new THREE.Vector3(...geom.coordinates);
+                            } else if (geom.type === "LineString" && geom.coordinates.length > 0) {
+                                annoPos = new THREE.Vector3(...geom.coordinates[0]);
+                            } else if ((geom.type === "Polygon" || geom.type === "MultiPolygon") && geom.coordinates.length > 0) {
+                                const ring = geom.type === "Polygon" ? geom.coordinates[0] : geom.coordinates[0][0];
+                                if (ring && ring.length > 0) {
+                                    annoPos = new THREE.Vector3(...ring[0]);
+                                }
+                            }
+                        }
+
+                        if (annoPos) {
+                            // ━━━ Convert annotation position from local → absolute by adding offset ━━━
+                            // (Coordinates are stored as local in geometry, but annotations need absolute for camera nav)
+                            annoPos.add(pcOffset);
+                            const descriptionHtml = (function() {
+                                let html = '<table style="font-size: 0.9em; width: 100%; border-collapse: collapse;">';
+                                for (let k in props) {
+                                    html += `<tr style="border-bottom: 1px solid #444"><td style="padding:2px; font-weight:bold; color:var(--accent)">${k}</td><td style="padding:2px">${props[k]}</td></tr>`;
+                                }
+                                return html + '</table>';
+                            })();
+
+                            const anno = new Potree.Annotation({
+                                position: annoPos,
+                                title: name,
+                                description: descriptionHtml,
+                                visible: false
+                            });
+                            layerAnnotation.add(anno);
+                        }
+                    });
+
+                    viewer.scene.annotations.add(layerAnnotation);
 
                     window.loadedLayers.push({ type: 'KML', label, node: layerNode, visual: layerNode });
                     updateLayerBadge();

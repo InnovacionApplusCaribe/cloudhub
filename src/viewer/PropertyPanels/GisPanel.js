@@ -41,7 +41,7 @@ export class GisPanel {
 		let elSettings = $(`<div class="pv-menu-list" style="margin-bottom: 20px;"></div>`);
 
 		// 1) Point Size Slider
-		if (gisLayer.pointsMesh) {
+		if (gisLayer.pointsMesh && gisLayer.pointsMesh.material && gisLayer.pointsMesh.material.size !== undefined) {
 			let savedSize = localStorage.getItem(`Potree_GisLayer_${layerName}_pointSize`);
 			if(savedSize !== null) {
 				gisLayer.pointsMesh.material.size = parseFloat(savedSize);
@@ -73,7 +73,7 @@ export class GisPanel {
 		this.container.append(elSettings);
 
 		// Activate Slider
-		if (gisLayer.pointsMesh) {
+		if (gisLayer.pointsMesh && gisLayer.pointsMesh.material && gisLayer.pointsMesh.material.size !== undefined) {
 			let sld = elSettings.find("#sldGisPointSize");
 			sld.slider({
 				value: gisLayer.pointsMesh.material.size,

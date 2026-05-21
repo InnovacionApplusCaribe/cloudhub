@@ -61,7 +61,7 @@ export class PropertiesPanel{
 			this.setAnnotation(object);
 		}else if(object instanceof CameraAnimation){
 			this.setCameraAnimation(object);
-		}else if(object.type === "GisLayer" || object.type === "GisFeature"){
+		}else if(object && (object.type === "GisLayer" || object.type === "GisFeature")){
 			this.setGisLayer(object);
 		}
 		

@@ -599,14 +599,37 @@ export class Sidebar{
 
 			if (measurement.type === "GisLayer" && measurement.features) {
 				const featureToNodeId = new Map();
-				for (const gisFeature of measurement.features) {
-					let fIcon = `${Potree.resourcePath}/icons/triangle.svg`;
-					if (gisFeature.feature.geometry && gisFeature.feature.geometry.type === "Point") {
-						fIcon = `${Potree.resourcePath}/icons/point.svg`;
+				
+				const addFeaturesAsync = async () => {
+					const features = measurement.features;
+					const total = features.length;
+					const batchSize = 50; 
+					
+					for (let i = 0; i < total; i += batchSize) {
+						const chunk = features.slice(i, i + batchSize);
+						for (const gisFeature of chunk) {
+							let fIcon = `${Potree.resourcePath}/icons/triangle.svg`;
+							if (gisFeature.feature.geometry && gisFeature.feature.geometry.type === "Point") {
+								fIcon = `${Potree.resourcePath}/icons/point.svg`;
+							}
+							let fNodeId = createNode(nodeID, gisFeature.name, fIcon, gisFeature);
+							featureToNodeId.set(gisFeature, fNodeId);
+						}
+						
+						// Yield to keep UI responsive and avoid "Not Responding" state
+						await new Promise(resolve => setTimeout(resolve, 0));
 					}
-					let fNodeId = createNode(nodeID, gisFeature.name, fIcon, gisFeature);
-					featureToNodeId.set(gisFeature, fNodeId);
-				}
+					
+					// Re-trigger selection logic if a feature was already selected during loading
+					if (measurement.selectedFeature) {
+						const fNodeId = featureToNodeId.get(measurement.selectedFeature);
+						if (fNodeId) {
+							tree.jstree('select_node', fNodeId);
+						}
+					}
+				};
+				
+				addFeaturesAsync();
 
 				measurement.addEventListener('gis_feature_selected', (event) => {
 					let fNodeId = featureToNodeId.get(event.feature);

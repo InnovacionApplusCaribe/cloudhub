@@ -13,7 +13,10 @@ const XHRFactory = {
 	 */
 	proxyAzureUrl: function (url) {
 		if (url && url.includes('.blob.core.windows.net') && !url.includes('/api/proxy-blob')) {
-			return '/api/proxy-blob?url=' + encodeURIComponent(url);
+			// Decode first to normalize any already-encoded chars (e.g. %2F in SAS tokens)
+			// then re-encode cleanly — prevents double-encoding (%2F -> %252F) which
+			// breaks SAS signature validation on Azure and causes 404s.
+			return '/api/proxy-blob?url=' + encodeURIComponent(decodeURIComponent(url));
 		}
 		return url;
 	},

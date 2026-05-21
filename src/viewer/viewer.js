@@ -1355,6 +1355,7 @@ export class Viewer extends EventDispatcher {
 				const isJson5 = file.name.toLowerCase().endsWith(".json5");
 				const isGeoPackage = file.name.toLowerCase().endsWith(".gpkg");
 				const isShapefile = file.name.toLowerCase().endsWith(".shp");
+				const isKml = file.name.toLowerCase().endsWith(".kml");
 
 				if (isJson5) {
 					try {
@@ -1408,7 +1409,28 @@ export class Viewer extends EventDispatcher {
 
 						const loader = new Potree.ShapefileLoader();
 						loader.transform = transform;
-						loader.offset = viewer.scene.pointclouds[0].position.clone();
+						loader.offset = viewer.scene.pointclouds[0].pcoGeometry ? viewer.scene.pointclouds[0].pcoGeometry.offset.clone() : new THREE.Vector3(0, 0, 0);
+
+						const result = await loader.load(file);
+						result.node.position.copy(viewer.scene.pointclouds[0].position);
+						viewer.scene.addMeasurement(result.node);
+					}
+				} else if (isKml) {
+					const hasPointcloud = viewer.scene.pointclouds.length > 0;
+
+					if (!hasPointcloud) {
+						let msg = "At least one point cloud is needed that specifies the ";
+						msg += "coordinate reference system before loading vector data.";
+						console.error(msg);
+					} else {
+						proj4.defs("WGS84", "+proj=longlat +ellps=WGS84 +datum=WGS84 +no_defs");
+						proj4.defs("pointcloud", this.getProjection());
+						let transform = proj4("WGS84", "pointcloud");
+
+						const loader = new Potree.KmlLoader();
+						loader.transform = transform;
+						loader.offset = viewer.scene.pointclouds[0].pcoGeometry ? viewer.scene.pointclouds[0].pcoGeometry.offset.clone() : new THREE.Vector3(0, 0, 0);
+						loader.boundingBox = viewer.scene.pointclouds[0].boundingBox ? viewer.scene.pointclouds[0].boundingBox.clone() : null;
 
 						const result = await loader.load(file);
 						result.node.position.copy(viewer.scene.pointclouds[0].position);
@@ -1524,9 +1546,10 @@ export class Viewer extends EventDispatcher {
 
 			let element = annotation.domElement;
 
-			let position = annotation.position.clone();
-			position.add(annotation.offset);
-			if (!position) {
+			let position = annotation.position ? annotation.position.clone() : null;
+			if (position) {
+				position.add(annotation.offset);
+			} else {
 				position = annotation.boundingBox.getCenter(new THREE.Vector3());
 			}
 
@@ -1787,8 +1810,10 @@ export class Viewer extends EventDispatcher {
 					near = 0.1;
 				}
 
-				camera.near = near;
-				camera.far = far;
+				if (!isNaN(near) && !isNaN(far) && isFinite(near) && isFinite(far)) {
+					camera.near = near;
+					camera.far = far;
+				}
 			} else {
 				// don't change near and far in this case
 			}
