@@ -288,7 +288,11 @@ export class InputHandler extends EventDispatcher {
 			if (target) {
 				this.startDragging(target.object, {location: target.point});
 			} else {
-				this.startDragging(null);
+				let clickable = this.hoveredElements
+					.map(el => el.object)
+					.find(obj => obj._listeners && obj._listeners['click'] && obj._listeners['click'].length > 0);
+
+				this.startDragging(clickable || null);
 			}
 		}
 
