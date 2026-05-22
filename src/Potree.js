@@ -1,3 +1,18 @@
+/**
+ * @namespace Potree
+ * @description Main entry point and namespace for the Potree library.
+ * This file aggregates and exports all core modules, loaders, materials, viewers,
+ * and utilities. It also maintains global library states such as the worker pool,
+ * point budgets, loading limits, and LRU cache settings.
+ * 
+ * Architectural Overview:
+ * - Entrypoint: Handles namespace exports and general loaders (e.g. `loadPointCloud`).
+ * - Core classes: `PointCloudOctree`, `WorkerPool`, `LRU`.
+ * - Loader Pipeline: `POCLoader` (for Potree 1.x cloud.js), `OctreeLoader` (for Potree 2.0 metadata.json),
+ *   `EptLoader`/`CopcLoader` (for Entwine Point Tile and Cloud Optimized Point Cloud).
+ * - Render Pipeline: Custom materials (e.g., `PointCloudMaterial`) and custom WebGL rendering logic.
+ * - Viewer: `Viewer` class which manages UI, navigation, tools, and the Three.js scene wrapper.
+ */
 
 export * from "./Actions.js";
 export * from "./AnimationPath.js";
@@ -88,23 +103,57 @@ import {CopcLoader, EptLoader} from "./loader/EptLoader.js";
 import {PointCloudOctree} from "./PointCloudOctree.js";
 import {WorkerPool} from "./WorkerPool.js";
 
+/**
+ * Global worker pool utilized by loaders for parsing and processing tasks in parallel.
+ * @type {WorkerPool}
+ */
 export const workerPool = new WorkerPool();
 
+/**
+ * Current version of the Potree library.
+ */
 export const version = {
 	major: 1,
 	minor: 8,
 	suffix: '.0'
 };
 
+/**
+ * Global Least Recently Used (LRU) cache manager for point cloud octree nodes.
+ * @type {LRU}
+ */
 export let lru = new LRU();
 
 console.log('Potree ' + version.major + '.' + version.minor + version.suffix);
 
+/**
+ * Maximum number of points that can be loaded/rendered at one time (point budget).
+ * @type {number}
+ */
 export let pointBudget = 1 * 1000 * 1000;
+
+/**
+ * Incremental count of the current frame number, updated every render loop.
+ * @type {number}
+ */
 export let framenumber = 0;
+
+/**
+ * Number of point cloud nodes currently loading asynchronously.
+ * @type {number}
+ */
 export let numNodesLoading = 0;
+
+/**
+ * Maximum number of point cloud nodes allowed to load concurrently.
+ * @type {number}
+ */
 export let maxNodesLoading = 4;
 
+/**
+ * Debug configuration and stats holder.
+ * @type {Object}
+ */
 export const debug = {};
 
 let scriptPath = "";
@@ -129,7 +178,18 @@ let resourcePath = scriptPath + '/resources';
 // resourcePath:build/potree/resources
 export {scriptPath, resourcePath};
 
-
+/**
+ * Loads a point cloud from the specified URL path. Supports multiple formats:
+ * - Entwine Point Tile (ept.json)
+ * - Cloud Optimized Point Cloud (.copc.laz)
+ * - Potree 1.x point cloud format (cloud.js)
+ * - Potree 2.0 point cloud format (metadata.json)
+ * 
+ * @param {string} path - URL path to the metadata/descriptor file of the point cloud.
+ * @param {string} name - User-defined name for the loaded point cloud instance.
+ * @param {function} [callback] - Optional callback function triggered on load completion.
+ * @returns {Promise<Object>} A promise resolving to {type: 'pointcloud_loaded', pointcloud: PointCloudOctree} if no callback is supplied.
+ */
 export function loadPointCloud(path, name, callback){
 	let loaded = function(e){
 		e.pointcloud.name = name;

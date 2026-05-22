@@ -1,10 +1,74 @@
 
+/**
+ * SRC/POTREERENDERER.JS
+ * 
+ * WebGL Rendering Engine for Point Clouds
+ * 
+ * CORE RESPONSIBILITIES:
+ * 1. VISIBILITY CULLING: Determine which octree nodes are visible to the camera
+ * 2. LOD MANAGEMENT: Load/unload nodes based on screen pixel size and distance
+ * 3. MATERIAL UNIFORMS: Update GPU shader parameters (camera, lighting, colors)
+ * 4. POINT BUDGET: Keep total visible points within performance target
+ * 5. RENDERING PIPELINE: Batch render multiple point clouds efficiently
+ * 
+ * RENDERING PIPELINE:
+ * ┌─────────────────────────────────────────────────────┐
+ * │ Frame Begin                                         │
+ * ├─────────────────────────────────────────────────────┤
+ * │ For each PointCloud:                                │
+ * │  1. Frustum Culling - Remove off-screen nodes       │
+ * │  2. Pixel Size Culling - Remove distant nodes       │
+ * │  3. Point Budget Sorting - Prioritize important nodes│
+ * │  4. Load/Unload - Manage GPU memory                 │
+ * │  5. Update Visibility Texture - For shader feedback │
+ * ├─────────────────────────────────────────────────────┤
+ * │ Update Material Uniforms                            │
+ * │  - Camera matrices, FOV, near/far planes            │
+ * │  - Clipping volumes, color scheme, elevation range  │
+ * │  - Point size calculations                          │
+ * ├─────────────────────────────────────────────────────┤
+ * │ Render All Nodes                                    │
+ * │  - Three.js renders visible nodes with material     │
+ * │  - GPU applies point attributes (RGB, classification)
+ * │  - EDL post-process for depth perception (optional) │
+ * ├─────────────────────────────────────────────────────┤
+ * │ Frame End                                           │
+ * └─────────────────────────────────────────────────────┘
+ * 
+ * PERFORMANCE OPTIMIZATIONS:
+ * - Async node loading (doesn't block render)
+ * - Visibility texture: 4 bytes per node (parent linkage, LOD offset)
+ * - GPU culling: Some tests offloaded to vertex shader
+ * - Memory pooling: Reuse node visibility arrays
+ * 
+ * SHADER INTEGRATION:
+ * Material uniforms passed each frame:
+ * - uVisibleNodes: Texture encoding octree visibility
+ * - uPointcloudIndex: Which cloud in multi-cloud scene
+ * - level, vnStart, pcIndex: Per-node rendering hints
+ * - elevationRange, classificationScheme: Color mappings
+ * 
+ * KEY FILES:
+ * - PotreeRenderer.js: This file (visibility/LOD logic)
+ * - viewer/PotreeRenderer.js: UI rendering integration
+ * - materials/PointCloudMaterial.js: GPU shader material
+ */
+
 import * as THREE from "../libs/three.js/build/three.module.js";
 import {PointCloudTree} from "./PointCloudTree.js";
 import {PointCloudOctreeNode} from "./PointCloudOctree.js";
 import {PointCloudArena4DNode} from "./arena4d/PointCloudArena4D.js";
 import {PointSizeType, ClipTask, ElevationGradientRepeat} from "./defines.js";
 
+/**
+ * Utility: Convert Three.js enum to WebGL constant.
+ * Maps Three.js texture/buffer constants to raw WebGL values.
+ * Used when directly interfacing with WebGL (e.g., shader setup).
+ * 
+ * @param {WebGLRenderingContext} _gl - WebGL context
+ * @param {number} p - Three.js constant (e.g., THREE.LinearFilter)
+ * @returns {number} WebGL constant (e.g., gl.LINEAR)
+ */
 // Copied from three.js: WebGLRenderer.js
 function paramThreeToGL(_gl, p) {
 
@@ -540,16 +604,41 @@ class WebGLBuffer {
 
 };
 
+/**
+ * Renderer
+ * 
+ * Low-level WebGL buffer and shader management.
+ * Manages GPU resources (vertex buffers, shaders, textures).
+ * Called by higher-level rendering code (viewer/PotreeRenderer.js).
+ * 
+ * RESPONSIBILITIES:
+ * - Create/update/delete WebGL vertex array objects (VAOs)
+ * - Manage vertex buffer objects (VBOs) for geometries
+ * - Compile and link GLSL shader programs
+ * - Manage GPU textures and framebuffers
+ * - Abstract WebGL type conversions
+ */
 export class Renderer {
 
+	/**
+	 * Constructs a renderer wrapping a Three.js WebGL renderer.
+	 * 
+	 * @param {THREE.WebGLRenderer} threeRenderer - Three.js renderer with WebGL context
+	 */
 	constructor(threeRenderer) {
 		this.threeRenderer = threeRenderer;
 		this.gl = this.threeRenderer.getContext();
 
+		/** @type {Map<THREE.BufferGeometry, WebGLBuffer>} - GPU vertex buffers */
 		this.buffers = new Map();
+		
+		/** @type {Map<string, Shader>} - Compiled GPU shader programs */
 		this.shaders = new Map();
+		
+		/** @type {Map<string, THREE.Texture>} - GPU textures */
 		this.textures = new Map();
 
+		// Map typed array types to WebGL constants
 		this.glTypeMapping = new Map();
 		this.glTypeMapping.set(Float32Array, this.gl.FLOAT);
 		this.glTypeMapping.set(Uint8Array, this.gl.UNSIGNED_BYTE);
@@ -558,6 +647,12 @@ export class Renderer {
 		this.toggle = 0;
 	}
 
+	/**
+	 * Deletes a vertex buffer from GPU memory.
+	 * Called when geometry is disposed.
+	 * 
+	 * @param {THREE.BufferGeometry} geometry - Geometry whose buffers to delete
+	 */
 	deleteBuffer(geometry) {
 
 		let gl = this.gl;
@@ -570,6 +665,21 @@ export class Renderer {
 		}
 	}
 
+	/**
+	 * Creates a vertex buffer on GPU for a geometry.
+	 * 
+	 * PROCESS:
+	 * 1. Create VAO (vertex array object) for this geometry
+	 * 2. For each attribute (position, color, intensity, etc):
+	 *    - Create VBO (vertex buffer object) on GPU
+	 *    - Upload data to GPU
+	 *    - Set up vertex attribute pointers
+	 *    - Enable attribute in shader
+	 * 3. Attach dispose listener for cleanup
+	 * 
+	 * @param {THREE.BufferGeometry} geometry - Geometry to upload to GPU
+	 * @returns {WebGLBuffer} GPU buffer object with VAO and VBOs
+	 */
 	createBuffer(geometry){
 		let gl = this.gl;
 		let webglBuffer = new WebGLBuffer();
@@ -620,6 +730,12 @@ export class Renderer {
 		return webglBuffer;
 	}
 
+	/**
+	 * Updates a vertex buffer with new data (dynamic updates).
+	 * Called when geometry attributes change.
+	 * 
+	 * @param {THREE.BufferGeometry} geometry - Geometry to update
+	 */
 	updateBuffer(geometry){
 		let gl = this.gl;
 

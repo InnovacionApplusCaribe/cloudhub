@@ -1,9 +1,24 @@
 
 import * as THREE from "../../libs/three.js/build/three.module.js";
 
-
+/**
+ * @class PotreeRenderer
+ * @description High-level viewer renderer wrapper (distinct from the core point cloud rendering engine at `src/PotreeRenderer.js`).
+ * 
+ * Responsibilities:
+ * - Coordinates the rendering of a single frame of the Potree viewer.
+ * - Renders the background elements (skybox, gradient background, or solid colors).
+ * - Delegates rendering of the point clouds to the core renderer `viewer.pRenderer` (the `Renderer` class).
+ * - Renders standard Three.js scene geometry (measurements, annotations, user-added shapes).
+ * - Updates and renders interactive tool overlays (ClippingTool markers/volumes, TransformationTool handles, Controls).
+ * - Dispatches render lifecycle events (`render.pass.begin`, `render.pass.scene`, `render.pass.perspective_overlay`, `render.pass.end`) allowing plugins to inject custom WebGL passes.
+ */
 export class PotreeRenderer {
 
+	/**
+	 * Creates an instance of PotreeRenderer.
+	 * @param {Viewer} viewer - The main viewer instance.
+	 */
 	constructor (viewer) {
 		this.viewer = viewer;
 		this.renderer = viewer.renderer;
@@ -20,10 +35,17 @@ export class PotreeRenderer {
 		}
 	}
 
+	/**
+	 * Clears the WebGL render targets (noop in this implementation).
+	 */
 	clearTargets(){
 
 	}
 
+	/**
+	 * Clears the WebGL color and depth buffers, setting the clear color
+	 * according to the viewer's current background preference (skybox, gradient, black, white, transparent).
+	 */
 	clear(){
 		let {viewer, renderer} = this;
 
@@ -44,6 +66,14 @@ export class PotreeRenderer {
 		renderer.clear();
 	}
  
+	/**
+	 * Renders a full frame. Coordinates background rendering, point cloud rendering,
+	 * scene graph rendering, controls, overlays, and tool updates.
+	 * 
+	 * @param {Object} params - Render parameters.
+	 * @param {THREE.Camera} [params.camera] - Optional override camera. Defaults to active scene camera.
+	 * @param {Array<number>} [params.viewport] - Optional viewport dimensions: [x, y, width, height].
+	 */
 	render(params){
 		let {viewer, renderer} = this;
 

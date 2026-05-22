@@ -1,8 +1,59 @@
-// State
+/**
+ * PUBLIC/APP.JS
+ * 
+ * CloudHub Caribe Dashboard - Frontend Management Interface
+ * 
+ * FEATURES:
+ * - Project listing with search/filter
+ * - LAS/LAZ file upload with progress tracking
+ * - Dual storage: Local server or Azure Cloud
+ * - Project management (view, delete, convert)
+ * - Seamless integration with /api/* backend
+ * 
+ * ARCHITECTURE:
+ * - State-driven UI: currentData holds all project data
+ * - Modal-based workflow: upload, delete, settings
+ * - Async/await patterns for network operations
+ * - HTML elements cached in module scope for performance
+ * 
+ * KEY WORKFLOWS:
+ * 1. Page Load -> checkConfig() -> Show/hide cloud option
+ * 2. Upload -> choose storage -> upload file -> poll status -> view result
+ * 3. Project -> click -> navigate to viewer
+ * 4. Delete -> select project -> confirm -> remove
+ * 
+ * PERFORMANCE NOTES:
+ * - Large files (>1GB) may take several minutes
+ * - Azure uploads bypass server (direct to Azure Blob)
+ * - Status polling intervals: 2s initially, back off to 10s
+ */
+
+// ============================================================================
+// GLOBAL STATE
+// ============================================================================
+
+/** @type {Object} Current application state */
 let currentData = { uploads: [], examples: [] };
+
+/** @type {boolean} Whether cloud (Azure) upload is available */
 let isCloudEnabled = false;
 
-// Helper: safely parse a fetch response as JSON, guarding against HTML fallback
+// ============================================================================
+// UTILITY FUNCTIONS
+// ============================================================================
+
+/**
+ * Safe JSON fetch with error handling for HTML fallback (e.g., error pages).
+ * 
+ * Many servers return HTML error pages instead of JSON on errors.
+ * This helper ensures we get actual JSON or throw a clear error.
+ * 
+ * @async
+ * @param {string} url - API endpoint
+ * @param {Object} [options] - Fetch options
+ * @returns {Promise<Object>} Parsed JSON response
+ * @throws {Error} If response not OK or content-type not JSON
+ */
 async function safeJsonFetch(url, options) {
     const res = await fetch(url, options);
     if (!res.ok) throw new Error(`HTTP ${res.status} ${res.statusText}`);
@@ -13,12 +64,19 @@ async function safeJsonFetch(url, options) {
     return res.json();
 }
 
-// Storage Destination selector setup
+// ============================================================================
+// STORAGE DESTINATION SELECTOR
+// ============================================================================
+
+// DOM elements for storage mode selection
 const storageGroup = document.getElementById('storage-destination-group');
 const localLabel = document.getElementById('local-storage-label');
 const cloudLabel = document.getElementById('cloud-storage-label');
 const storageRadios = document.querySelectorAll('input[name="storage-dest"]');
 
+/**
+ * Storage mode changed: update UI to reflect selection
+ */
 storageRadios.forEach(radio => {
     radio.addEventListener('change', () => {
         localLabel.classList.toggle('active', radio.value === 'local');
@@ -26,6 +84,12 @@ storageRadios.forEach(radio => {
     });
 });
 
+/**
+ * Check if cloud (Azure) upload is available and show/hide storage selector.
+ * Called on page load.
+ * 
+ * @async
+ */
 async function checkConfig() {
     try {
         const config = await safeJsonFetch('/api/config');
@@ -39,14 +103,25 @@ async function checkConfig() {
 }
 checkConfig();
 
-// Navigation
+// ============================================================================
+// NAVIGATION
+// ============================================================================
+
 const navLinks = document.querySelectorAll('.nav-links li');
 const contentSections = document.querySelectorAll('main > section');
 
+/**
+ * Navigation click handler: switch visible section
+ */
 navLinks.forEach(link => {
     link.addEventListener('click', () => switchSection(link.dataset.section));
 });
 
+/**
+ * Switch between dashboard sections (uploads, examples, settings).
+ * 
+ * @param {string} target - Section ID (e.g., 'uploads', 'examples')
+ */
 function switchSection(target) {
     navLinks.forEach(l => l.classList.remove('active'));
     const activeLink = document.querySelector(`[data-section="${target}"]`);
@@ -56,13 +131,17 @@ function switchSection(target) {
     if (sec) sec.classList.remove('hidden');
 }
 
-// Modal
+// ============================================================================
+// MODAL DIALOGS
+// ============================================================================
+
 const uploadModal = document.getElementById('upload-modal');
 const deleteModal = document.getElementById('delete-modal');
 const newUploadBtn = document.getElementById('new-upload-btn');
 const closeBtnEl = document.getElementById('modal-close-btn');
 const deleteCloseBtn = document.getElementById('delete-close-btn');
 
+// Set up modal event listeners
 if (newUploadBtn) newUploadBtn.onclick = () => openModal();
 if (closeBtnEl) closeBtnEl.onclick = () => closeModal();
 if (deleteCloseBtn) deleteCloseBtn.onclick = () => closeDeleteModal();
@@ -71,6 +150,9 @@ window.onclick = (e) => {
     if (e.target === deleteModal) closeDeleteModal();
 };
 
+/**
+ * Open upload modal and reset form state.
+ */
 function openModal() {
     uploadModal.classList.remove('hidden');
     // Reset inputs
@@ -86,16 +168,25 @@ function openModal() {
     if (bar) bar.style.width = '0%';
 }
 
+/**
+ * Close upload modal.
+ */
 function closeModal() {
     uploadModal.classList.add('hidden');
 }
 
-// Drag-and-drop on drop zone
+// ============================================================================
+// DRAG-AND-DROP FILE SELECTION
+// ============================================================================
+
 const lasDropZone = document.getElementById('las-drop-zone');
 const lasInput = document.getElementById('las-input');
 const lasBrowseBtn = document.getElementById('las-browse-btn');
 
+// Browse button click: trigger file input
 if (lasBrowseBtn) lasBrowseBtn.onclick = (e) => { e.stopPropagation(); lasInput.click(); };
+
+// Drag-and-drop handlers
 if (lasDropZone) {
     lasDropZone.addEventListener('click', () => lasInput.click());
     lasDropZone.addEventListener('dragover', (e) => { e.preventDefault(); lasDropZone.classList.add('drag-over'); });
@@ -106,8 +197,25 @@ if (lasDropZone) {
         if (e.dataTransfer.files.length) startUpload(e.dataTransfer.files);
     });
 }
+
+// File input change handler
 if (lasInput) lasInput.onchange = (e) => { if (e.target.files.length) startUpload(e.target.files); };
 
+// ============================================================================
+// FILE UPLOAD WORKFLOW
+// ============================================================================
+
+/**
+ * Initiate file upload: validate format, show progress UI, route to local/cloud.
+ * 
+ * VALIDATION:
+ * - Only .las or .laz files accepted
+ * - File name displayed to user
+ * - Storage destination (local or cloud) determined from radio button
+ * 
+ * @async
+ * @param {FileList} files - Files selected by user
+ */
 async function startUpload(files) {
     const firstFile = files[0];
     const ext = firstFile.name.split('.').pop().toLowerCase();
@@ -143,6 +251,21 @@ async function startUpload(files) {
     }
 }
 
+/**
+ * Upload file to local server.
+ * 
+ * PROCESS:
+ * 1. Create FormData with file + metadata
+ * 2. POST to /api/upload with progress tracking
+ * 3. Poll /api/status for conversion progress
+ * 4. Refresh project list when complete
+ * 
+ * @async
+ * @param {FileList} files - Files to upload
+ * @param {HTMLElement} bar - Progress bar element
+ * @param {HTMLElement} statusText - Status message element
+ * @param {HTMLElement} pctText - Percentage text element
+ */
 async function uploadToLocal(files, bar, statusText, pctText) {
     statusText.textContent = 'Uploading point cloud to server...';
     pctText.textContent = '5%';

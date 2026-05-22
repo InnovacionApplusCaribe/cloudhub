@@ -36,8 +36,26 @@ import { VRButton } from '../../libs/three.js/extra/VRButton.js';
 import JSON5 from "../../libs/json5-2.1.3/json5.mjs";
 
 
+/**
+ * @class Viewer
+ * @extends EventDispatcher
+ * @description The core viewer class of Potree. Responsible for:
+ * - Managing the HTML DOM layout (render area, sidebar, maps, annotations).
+ * - Configuring WebGL renderers (Three.js WebGLRenderer, EDLRenderer, HQSplatRenderer).
+ * - Managing scene loading, camera states, navigation controls, and lighting.
+ * - Binding tools (Clipping, Transformation, Annotations, Measurements, Volume, and Profile).
+ * - Implementing the main rendering and update loop (`loop`).
+ */
 export class Viewer extends EventDispatcher {
 
+	/**
+	 * Creates an instance of the Potree Viewer.
+	 * 
+	 * @param {HTMLElement} domElement - The DOM container element where the viewer canvas and UI will be injected.
+	 * @param {Object} [args={}] - Optional configuration arguments.
+	 * @param {function} [args.onPointCloudLoaded] - Callback triggered whenever a point cloud is loaded.
+	 * @param {boolean} [args.noDragAndDrop] - Disable default file drag-and-drop loading capabilities.
+	 */
 	constructor(domElement, args = {}) {
 		super();
 
@@ -379,6 +397,12 @@ export class Viewer extends EventDispatcher {
 	// Viewer API
 	// ------------------------------------------------------------------------------------
 
+	/**
+	 * Sets the active scene to be rendered and updates scene event listeners.
+	 * Dispatches a 'scene_changed' event.
+	 * 
+	 * @param {Scene} scene - The new Scene instance to activate.
+	 */
 	setScene(scene) {
 		if (scene === this.scene) {
 			return;
@@ -424,6 +448,12 @@ export class Viewer extends EventDispatcher {
 		}
 	};
 
+	/**
+	 * Sets the navigation controller (e.g. OrbitControls, FirstPersonControls, EarthControls)
+	 * and registers/deregisters it from the input handler.
+	 * 
+	 * @param {Object} controls - The controls object (OrbitControls, FirstPersonControls, etc.)
+	 */
 	setControls(controls) {
 		if (controls !== this.controls) {
 			if (this.controls) {
@@ -693,6 +723,11 @@ export class Viewer extends EventDispatcher {
 		}
 	}
 
+	/**
+	 * Toggles visibility for all classification categories.
+	 * If all are currently visible, it hides them all. Otherwise, it shows them all.
+	 * Dispatches a 'classification_visibility_changed' event if any changes occur.
+	 */
 	toggleAllClassificationsVisibility() {
 
 		let numVisible = 0;
@@ -900,6 +935,9 @@ export class Viewer extends EventDispatcher {
 		this.controls.stop();
 	};
 
+	/**
+	 * Toggles the visibility of the 3D navigation cube helper in the corner.
+	 */
 	toggleNavigationCube() {
 		this.navigationCube.visible = !this.navigationCube.visible;
 	}
@@ -1161,6 +1199,10 @@ export class Viewer extends EventDispatcher {
 
 	};
 
+	/**
+	 * Toggles the visibility of the sidebar panel by adjusting the layout offset
+	 * of the render area.
+	 */
 	toggleSidebar() {
 		let renderArea = $('#potree_render_area');
 		let isVisible = renderArea.css('left') !== '0px';
@@ -1172,6 +1214,9 @@ export class Viewer extends EventDispatcher {
 		}
 	};
 
+	/**
+	 * Toggles the visibility of the 2D map overlay (if MapView is initialized).
+	 */
 	toggleMap() {
 		// let map = $('#potree_map');
 		// map.toggle(100);
@@ -1624,6 +1669,12 @@ export class Viewer extends EventDispatcher {
 
 	}
 
+	/**
+	 * Configures default material parameters for a point cloud after some of its data has loaded.
+	 * Dynamically adjusts bounds such as intensityRange using attributes parsed from the dataset.
+	 * 
+	 * @param {PointCloudOctree} pointcloud - The point cloud instance whose material is being initialized.
+	 */
 	updateMaterialDefaults(pointcloud) {
 		// PROBLEM STATEMENT:
 		// * [min, max] of intensity, source id, etc. are computed as point clouds are loaded

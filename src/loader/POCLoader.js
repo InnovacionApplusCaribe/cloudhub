@@ -8,6 +8,15 @@ import {BinaryLoader} from "./BinaryLoader.js";
 import {Utils} from "../utils.js";
 import {PointAttribute, PointAttributes, PointAttributeTypes} from "./PointAttributes.js";
 
+/**
+ * Parses point cloud attributes from a `cloud.js` configuration object.
+ * Maps legacy attribute names (e.g. RGBA, COLOR_PACKED, INTENSITY) to standardized names,
+ * converts numeric type descriptors to active `PointAttributeTypes`, and constructs
+ * a `PointAttributes` instance containing normal vectors if present.
+ * 
+ * @param {Object} cloudjs - Parsed JSON object from the `cloud.js` file.
+ * @returns {PointAttributes} Instantiated point attributes for the point cloud data buffers.
+ */
 function parseAttributes(cloudjs){
 
 	let version = new Version(cloudjs.version);
@@ -116,8 +125,23 @@ function lasLazAttributes(fMno){
 	return attributes;
 }
 
+/**
+ * @class POCLoader
+ * @description Loader for the Potree Octree Format (typically defined by a `cloud.js` file).
+ * Responsible for fetching point cloud metadata, initializing the octree geometry,
+ * setting up coordinate offsets, bounding boxes, attributes, and loading the root node hierarchy.
+ */
 export class POCLoader {
 
+	/**
+	 * Asynchronously loads point cloud metadata from a JSON descriptor file (typically `cloud.js`),
+	 * initializes a `PointCloudOctreeGeometry` instance, configures coordinate projections and bounding sizes,
+	 * attaches the corresponding loader type (e.g. `LasLazLoader` or `BinaryLoader`),
+	 * loads the hierarchy root node, and triggers the callback.
+	 * 
+	 * @param {string} url - URL path to the `cloud.js` configuration file.
+	 * @param {function} callback - Callback function invoked with the loaded PointCloudOctreeGeometry.
+	 */
 	static load(url, callback){
 		try {
 			let pco = new PointCloudOctreeGeometry();

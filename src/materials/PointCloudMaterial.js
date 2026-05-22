@@ -12,8 +12,22 @@ import {PointSizeType, PointShape, TreeType, ElevationGradientRepeat} from "../d
 // http://stackoverflow.com/questions/3717226/radius-of-projected-sphere
 //
 
-
+/**
+ * @class PointCloudMaterial
+ * @extends THREE.RawShaderMaterial
+ * @description Custom WebGL shader material designed for high-performance rendering of octree point clouds.
+ * 
+ * Key features:
+ * - Dynamically compiles custom shaders with dynamically injected GLSL `#define` blocks (`getDefines()`).
+ * - Supports multiple coloring methods: RGB, Elevation (gradient mapping), Intensity, Classifications, Return number, GPS time, and Point Source ID.
+ * - Handles interactive clipping boxes, clip spheres, and clip polygons on the GPU.
+ * - Supports screen-space point attenuation, adaptive point sizes, and Eye-Dome Lighting (EDL) post-process pass integration.
+ */
 export class PointCloudMaterial extends THREE.RawShaderMaterial {
+	/**
+	 * Creates an instance of PointCloudMaterial.
+	 * @param {Object} [parameters={}] - Optional initial parameters for point size, tree type, etc.
+	 */
 	constructor (parameters = {}) {
 		super();
 
@@ -181,6 +195,10 @@ export class PointCloudMaterial extends THREE.RawShaderMaterial {
 		this.defines.delete(key);
 	}
 
+	/**
+	 * Re-compiles the vertex and fragment shader sources by resolving latest defines
+	 * and updating material blend modes/depth testing states based on opacity and EDL settings.
+	 */
 	updateShaderSource () {
 
 		let vs = Shaders['pointcloud.vs'];
@@ -229,6 +247,12 @@ export class PointCloudMaterial extends THREE.RawShaderMaterial {
 		this.needsUpdate = true;
 	}
 
+	/**
+	 * Dynamically generates a string of WebGL `#define` statements based on the current
+	 * material configuration, active attribute, and point sizing/shaping styles.
+	 * 
+	 * @returns {string} Newline-separated list of `#define` declarations.
+	 */
 	getDefines () {
 		let defines = [];
 
@@ -555,6 +579,12 @@ export class PointCloudMaterial extends THREE.RawShaderMaterial {
 		}
 	}
 
+	/**
+	 * Gets or sets the active attribute name used to determine point colors.
+	 * Triggering the setter updates the shader defines and dispatches an 'active_attribute_changed' event.
+	 * 
+	 * @type {string|null} E.g., "rgba", "elevation", "intensity", "classification", etc.
+	 */
 	get activeAttributeName(){
 		return this._activeAttributeName;
 	}
@@ -698,6 +728,11 @@ export class PointCloudMaterial extends THREE.RawShaderMaterial {
 		}
 	}
 
+	/**
+	 * Gets or sets the [min, max] range of values used for elevation gradient coloring.
+	 * 
+	 * @type {Array<number>}
+	 */
 	get elevationRange () {
 		return this.uniforms.elevationRange.value;
 	}
@@ -742,6 +777,11 @@ export class PointCloudMaterial extends THREE.RawShaderMaterial {
 		this.uniforms.transition.value = value;
 	}
 
+	/**
+	 * Gets or sets the [min, max] range of values used to normalize point intensities.
+	 * 
+	 * @type {Array<number>}
+	 */
 	get intensityRange () {
 		return this.uniforms.intensityRange.value;
 	}

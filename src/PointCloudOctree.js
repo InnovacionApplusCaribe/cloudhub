@@ -1,49 +1,137 @@
 
+/**
+ * PointCloudOctree.js
+ * 
+ * CORE MODULE: Implements hierarchical octree-based point cloud representation with Level-of-Detail (LOD).
+ * 
+ * ARCHITECTURE:
+ * - PointCloudOctree: Root container managing the entire point cloud hierarchy
+ * - PointCloudOctreeNode: Individual octree nodes representing spatial subdivisions
+ * - PointCloudOctreeGeometryNode: GPU-resident geometry for a node
+ * 
+ * KEY CONCEPTS:
+ * 1. OCTREE STRUCTURE: 3D space subdivided into 8 child nodes (oct-tree)
+ *    - Each level doubles resolution (2^level nodes at depth)
+ *    - Efficient culling and LOD management
+ * 
+ * 2. LEVEL-OF-DETAIL (LOD):
+ *    - Remote nodes (far from camera) load lower resolution versions
+ *    - Closer nodes load progressively higher detail
+ *    - Minimizes GPU memory and bandwidth usage
+ * 
+ * 3. VISIBILITY CULLING:
+ *    - Camera frustum culling removes off-screen nodes
+ *    - Pixel size heuristic: nodes smaller than minimumNodePixelSize are skipped
+ *    - Dynamic point budget limits max visible points (performance cap)
+ * 
+ * 4. MATERIAL SYSTEM:
+ *    - Single PointCloudMaterial shared across all nodes
+ *    - Supports multiple rendering modes: RGB, Intensity, Classification, Elevation
+ *    - Each node can have different attributes via material uniforms
+ * 
+ * USAGE EXAMPLE:
+ *   const geometry = await loader.load('pointcloud.las');
+ *   const material = new PointCloudMaterial({ vertexColors: true });
+ *   const pointcloud = new PointCloudOctree(geometry, material);
+ *   scene.add(pointcloud);
+ *   // Renderer automatically manages LOD and visibility
+ * 
+ * PERFORMANCE NOTES:
+ * - visiblePointsTarget: Aim for 2-4M visible points for smooth 60fps
+ * - minimumNodePixelSize: Increase for performance, decrease for detail
+ * - pointBudget: Hard limit on total points in memory
+ */
+
 import * as THREE from "../libs/three.js/build/three.module.js";
 import {PointCloudTree, PointCloudTreeNode} from "./PointCloudTree.js";
 import {PointCloudOctreeGeometryNode} from "./PointCloudOctreeGeometry.js";
 import {Utils} from "./utils.js";
 import {PointCloudMaterial} from "./materials/PointCloudMaterial.js";
 
-
+/**
+ * PointCloudOctreeNode
+ * 
+ * Represents a single node in the octree hierarchy.
+ * Each node can have up to 8 children and contains a reference to a PointCloudOctreeGeometryNode
+ * (which holds the actual point data on GPU).
+ */
 export class PointCloudOctreeNode extends PointCloudTreeNode {
+	/**
+	 * @constructor
+	 */
 	constructor () {
 		super();
 
-		//this.children = {};
+		/** @type {Array<PointCloudOctreeNode>} - Array of 8 possible child nodes */
 		this.children = [];
+		
+		/** @type {THREE.Points} - Three.js object representing this node in 3D space */
 		this.sceneNode = null;
+		
+		/** @type {PointCloudOctree} - Reference to parent octree */
 		this.octree = null;
 	}
 
+	/**
+	 * Returns the number of points in this node's geometry.
+	 * @returns {number} Point count
+	 */
 	getNumPoints () {
 		return this.geometryNode.numPoints;
 	}
 
+	/**
+	 * Indicates this node is fully loaded (octree nodes are always loaded).
+	 * @returns {boolean} Always true for octree nodes
+	 */
 	isLoaded () {
 		return true;
 	}
 
+	/**
+	 * Identifies this as a tree node (not a geometry node).
+	 * @returns {boolean} Always true
+	 */
 	isTreeNode () {
 		return true;
 	}
 
+	/**
+	 * Identifies this is not a geometry-only node.
+	 * @returns {boolean} Always false
+	 */
 	isGeometryNode () {
 		return false;
 	}
 
+	/**
+	 * Gets the depth level of this node in the octree.
+	 * @returns {number} Level (0 = root)
+	 */
 	getLevel () {
 		return this.geometryNode.level;
 	}
 
+	/**
+	 * Gets the bounding sphere of this node.
+	 * @returns {THREE.Sphere} Bounding sphere
+	 */
 	getBoundingSphere () {
 		return this.geometryNode.boundingSphere;
 	}
 
+	/**
+	 * Gets the axis-aligned bounding box of this node.
+	 * @returns {THREE.Box3} Bounding box
+	 */
 	getBoundingBox () {
 		return this.geometryNode.boundingBox;
 	}
 
+	/**
+	 * Returns all 8 child nodes that exist.
+	 * @returns {Array<PointCloudOctreeNode>} Non-null children
+	 */
 	getChildren () {
 		let children = [];
 
@@ -56,6 +144,17 @@ export class PointCloudOctreeNode extends PointCloudTreeNode {
 		return children;
 	}
 
+	/**
+	 * Finds all points within a box-shaped clipping volume.
+	 * 
+	 * ALGORITHM:
+	 * 1. Convert each point from world space to box local space
+	 * 2. Check if point is within [-0.5, 0.5] in all axes (box is unit cube in local space)
+	 * 3. Convert passing points back to world space
+	 * 
+	 * @param {THREE.Mesh} boxNode - Box object whose matrix defines the clipping region
+	 * @returns {Array<THREE.Vector3>} Points inside the box, or null if no geometry
+	 */
 	getPointsInBox(boxNode){
 
 		if(!this.sceneNode){
@@ -68,6 +167,7 @@ export class PointCloudOctreeNode extends PointCloudTreeNode {
 		let stride = buffer.stride;
 		let view = new DataView(buffer.data);
 
+		// Convert from world space to box local space
 		let worldToBox = boxNode.matrixWorld.clone().invert();
 		let objectToBox = new THREE.Matrix4().multiplyMatrices(worldToBox, this.sceneNode.matrixWorld);
 
@@ -75,16 +175,20 @@ export class PointCloudOctreeNode extends PointCloudTreeNode {
 
 		let pos = new THREE.Vector4();
 		for(let i = 0; i < buffer.numElements; i++){
+			// Read position from buffer (stride-based layout)
 			let x = view.getFloat32(i * stride + posOffset + 0, true);
 			let y = view.getFloat32(i * stride + posOffset + 4, true);
 			let z = view.getFloat32(i * stride + posOffset + 8, true);
 
+			// Transform to box local space
 			pos.set(x, y, z, 1);
 			pos.applyMatrix4(objectToBox);
 
+			// Check if point is within unit cube
 			if(-0.5 < pos.x && pos.x < 0.5){
 				if(-0.5 < pos.y && pos.y < 0.5){
 					if(-0.5 < pos.z && pos.z < 0.5){
+						// Transform back to world space and store
 						pos.set(x, y, z, 1).applyMatrix4(this.sceneNode.matrixWorld);
 						inBox.push(new THREE.Vector3(pos.x, pos.y, pos.z));
 					}
@@ -95,28 +199,80 @@ export class PointCloudOctreeNode extends PointCloudTreeNode {
 		return inBox;
 	}
 
+	/**
+	 * Gets the octree node name (e.g., "r", "r0", "r01").
+	 * @type {string}
+	 */
 	get name () {
 		return this.geometryNode.name;
 	}
 };
 
+/**
+ * PointCloudOctree
+ * 
+ * Main container for a point cloud with hierarchical octree structure.
+ * Manages LOD, visibility culling, material uniforms, and node loading/unloading.
+ * 
+ * PROPERTIES:
+ * - visiblePointsTarget: Desired number of visible points (~2M for 60fps)
+ * - minimumNodePixelSize: Don't render nodes smaller than this (pixels)
+ * - pointBudget: Hard limit on GPU memory (points)
+ * - material: Shared PointCloudMaterial for all nodes
+ * 
+ * RENDERING PIPELINE:
+ * 1. PotreeRenderer determines visible nodes based on frustum culling
+ * 2. Visibility system loads high-LOD nodes, unloads distant ones
+ * 3. Material is updated with camera/renderer uniforms each frame
+ * 4. Three.js renders visible nodes via sceneNode objects
+ */
 export class PointCloudOctree extends PointCloudTree {
+	/**
+	 * Constructs a point cloud octree from geometry.
+	 * 
+	 * INITIALIZATION STEPS:
+	 * 1. Copy geometry properties (bounds, offset)
+	 * 2. Initialize material with best available attribute (RGBA > RGB > Intensity)
+	 * 3. Set height min/max for elevation gradient rendering
+	 * 4. Create root node from geometry
+	 * 
+	 * @param {PointCloudOctreeGeometry} geometry - Loaded octree geometry (has root node, attributes)
+	 * @param {PointCloudMaterial} [material] - Custom material (optional, defaults to PointCloudMaterial)
+	 */
 	constructor (geometry, material) {
 		super();
 
+		/** @type {number} - Hard maximum points in memory */
 		this.pointBudget = Infinity;
+		
+		/** @type {PointCloudOctreeGeometry} - Underlying geometry with octree structure */
 		this.pcoGeometry = geometry;
+		
+		/** @type {THREE.Box3} - World-space bounding box */
 		this.boundingBox = this.pcoGeometry.boundingBox;
+		
+		/** @type {THREE.Sphere} - World-space bounding sphere */
 		this.boundingSphere = this.boundingBox.getBoundingSphere(new THREE.Sphere());
+		
+		/** @type {PointCloudMaterial} - Shared GPU material for all nodes */
 		this.material = material || new PointCloudMaterial();
+		
+		/** @type {number} - Target visible point count (2M typical for 60fps) */
 		this.visiblePointsTarget = 2 * 1000 * 1000;
+		
+		/** @type {number} - Don't render nodes with pixel size < this (skip small nodes) */
 		this.minimumNodePixelSize = 150;
+		
+		/** @type {number} - Current tree level (0 = root) */
 		this.level = 0;
+		
+		// Copy offset from geometry (geospatial coordinate system)
 		this.position.copy(geometry.offset);
 		this.updateMatrix();
 
+		// Select best available rendering attribute
 		{
-
+			// Priority: RGBA > RGB > Intensity > Classification
 			let priorityQueue = ["rgba", "rgb", "intensity", "classification"];
 			let selected = "rgba";
 
@@ -127,6 +283,7 @@ export class PointCloudOctree extends PointCloudTree {
 					continue;
 				}
 
+				// Check if attribute has meaningful range (not flat)
 				let min = attribute.range[0].constructor.name === "Array" ? attribute.range[0] : [attribute.range[0]];
 				let max = attribute.range[1].constructor.name === "Array" ? attribute.range[1] : [attribute.range[1]];
 
@@ -145,17 +302,37 @@ export class PointCloudOctree extends PointCloudTree {
 			this.material.activeAttributeName = selected;
 		}
 
+		/** @type {boolean} - Debug: show bounding boxes */
 		this.showBoundingBox = false;
+		
+		/** @type {Array<PointCloudOctreeNode>} - Debug: bounding box visuals */
 		this.boundingBoxNodes = [];
+		
+		/** @type {Array} - Queue of nodes waiting to be loaded */
 		this.loadQueue = [];
+		
+		/** @type {THREE.Box3} - Bounding box of visible nodes (updated each frame) */
 		this.visibleBounds = new THREE.Box3();
+		
+		/** @type {Array<PointCloudOctreeNode>} - Currently visible nodes */
 		this.visibleNodes = [];
+		
+		/** @type {Array} - Visible geometry for rendering */
 		this.visibleGeometry = [];
+		
+		/** @type {boolean} - Generate DEM (digital elevation model) */
 		this.generateDEM = false;
+		
+		/** @type {Array} - Profile requests pending processing */
 		this.profileRequests = [];
+		
+		/** @type {string} - User-friendly name */
 		this.name = '';
+		
+		/** @type {boolean} - Visibility toggle */
 		this._visible = true;
 
+		// Set material elevation gradient range from data bounds
 		{
 			let box = [this.pcoGeometry.tightBoundingBox, this.getBoundingBoxWorld()]
 				.find(v => v !== undefined);
@@ -169,13 +346,20 @@ export class PointCloudOctree extends PointCloudTree {
 			this.material.heightMax = bMax;
 		}
 
-		// TODO read projection from file instead
+		// Coordinate system projection (e.g., UTM zone)
 		this.projection = geometry.projection;
 		this.fallbackProjection = geometry.fallbackProjection;
 
+		// Create root node from geometry
 		this.root = this.pcoGeometry.root;
 	}
 
+	/**
+	 * Sets the user-friendly name of this point cloud.
+	 * Dispatches a 'name_changed' event if the name actually changes.
+	 * 
+	 * @param {string} name - New name for the point cloud
+	 */
 	setName (name) {
 		if (this.name !== name) {
 			this.name = name;
@@ -183,10 +367,20 @@ export class PointCloudOctree extends PointCloudTree {
 		}
 	}
 
+	/**
+	 * Gets the user-friendly name of this point cloud.
+	 * @returns {string} Point cloud name
+	 */
 	getName () {
 		return this.name;
 	}
 
+	/**
+	 * Retrieves a point attribute by name (e.g., "intensity", "classification", "gpsTime").
+	 * 
+	 * @param {string} name - Attribute name
+	 * @returns {Object|null} Attribute object with {name, range, [array]} or null if not found
+	 */
 	getAttribute(name){
 
 		const attribute = this.pcoGeometry.pointAttributes.attributes.find(a => a.name === name);
@@ -198,36 +392,60 @@ export class PointCloudOctree extends PointCloudTree {
 		}
 	}
 
+	/**
+	 * Gets all available attributes for this point cloud.
+	 * @returns {PointAttributes} Object with list of available attributes and their ranges
+	 */
 	getAttributes(){
 		return this.pcoGeometry.pointAttributes;
 	}
 
+	/**
+	 * Converts a geometry node to a scene tree node for rendering.
+	 * 
+	 * PROCESS:
+	 * 1. Create PointCloudOctreeNode wrapper
+	 * 2. Create THREE.Points object with geometry and material
+	 * 3. Set up onBeforeRender callback to update material uniforms:
+	 *    - level: Octree level for visual debugging
+	 *    - vnStart: Visibility texture offset for this node
+	 *    - pcIndex: Index in visible nodes array
+	 * 4. Link to parent in scene graph or add as root
+	 * 5. Set up dispose listener for memory cleanup
+	 * 
+	 * @param {PointCloudOctreeGeometryNode} geometryNode - Geometry to convert
+	 * @param {PointCloudOctreeNode} [parent] - Parent tree node (null = root)
+	 * @returns {PointCloudOctreeNode} Scene tree node ready for rendering
+	 */
 	toTreeNode (geometryNode, parent) {
 		let node = new PointCloudOctreeNode();
 
-		// if(geometryNode.name === "r40206"){
-		//	console.log("creating node for r40206");
-		// }
+		// Create THREE.Points object (geometry + material for rendering)
 		let sceneNode = new THREE.Points(geometryNode.geometry, this.material);
 		sceneNode.name = geometryNode.name;
 		sceneNode.position.copy(geometryNode.boundingBox.min);
-		sceneNode.frustumCulled = false;
+		sceneNode.frustumCulled = false; // We handle culling in PotreeRenderer, not Three.js
+		
+		// Pre-render hook: update material uniforms specific to this node
 		sceneNode.onBeforeRender = (_this, scene, camera, geometry, material, group) => {
 			if (material.program) {
 				_this.getContext().useProgram(material.program.program);
 
+				// Update octree level uniform (for debug visualization)
 				if (material.program.getUniforms().map.level) {
 					let level = geometryNode.getLevel();
 					material.uniforms.level.value = level;
 					material.program.getUniforms().map.level.setValue(_this.getContext(), level);
 				}
 
+				// Update visibility node texture offset
 				if (this.visibleNodeTextureOffsets && material.program.getUniforms().map.vnStart) {
 					let vnStart = this.visibleNodeTextureOffsets.get(node);
 					material.uniforms.vnStart.value = vnStart;
 					material.program.getUniforms().map.vnStart.setValue(_this.getContext(), vnStart);
 				}
 
+				// Update point cloud index (for multi-cloud scenes)
 				if (material.program.getUniforms().map.pcIndex) {
 					let i = node.pcIndex ? node.pcIndex : this.visibleNodes.indexOf(node);
 					material.uniforms.pcIndex.value = i;
@@ -236,38 +454,30 @@ export class PointCloudOctree extends PointCloudTree {
 			}
 		};
 
-		// { // DEBUG
-		//	let sg = new THREE.SphereGeometry(1, 16, 16);
-		//	let sm = new THREE.MeshNormalMaterial();
-		//	let s = new THREE.Mesh(sg, sm);
-		//	s.scale.set(5, 5, 5);
-		//	s.position.copy(geometryNode.mean)
-		//		.add(this.position)
-		//		.add(geometryNode.boundingBox.min);
-		//
-		//	viewer.scene.scene.add(s);
-		// }
-
+		// Link geometry node to scene node
 		node.geometryNode = geometryNode;
 		node.sceneNode = sceneNode;
 		node.pointcloud = this;
 		node.children = [];
-		//for (let key in geometryNode.children) {
-		//	node.children[key] = geometryNode.children[key];
-		//}
+		
+		// Copy child references from geometry node
 		for(let i = 0; i < 8; i++){
 			node.children[i] = geometryNode.children[i];
 		}
 
+		// Add to scene graph
 		if (!parent) {
+			// This is the root node
 			this.root = node;
 			this.add(sceneNode);
 		} else {
+			// This is a child node
 			let childIndex = parseInt(geometryNode.name[geometryNode.name.length - 1]);
 			parent.sceneNode.add(sceneNode);
 			parent.children[childIndex] = node;
 		}
 
+		// Set up memory cleanup when node is disposed
 		let disposeListener = function () {
 			let childIndex = parseInt(geometryNode.name[geometryNode.name.length - 1]);
 			parent.sceneNode.remove(node.sceneNode);

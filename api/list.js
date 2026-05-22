@@ -1,3 +1,49 @@
+/**
+ * API/LIST.JS
+ * 
+ * Endpoint: GET /api/list
+ * 
+ * PURPOSE:
+ * Returns all available point cloud projects (uploaded or example datasets).
+ * Supports both local filesystem and Azure Blob Storage backends.
+ * 
+ * RESPONSE FORMAT:
+ * {
+ *   uploads: [
+ *     {
+ *       name: "project_name",
+ *       url: "https://blob.url/manifest.json?sastoken=...",
+ *       storageMode: "cloud|local",
+ *       metadata: { ... }
+ *     }
+ *   ],
+ *   examples: [
+ *     { name: "demo", url: "/examples/demo/manifest.json", ... }
+ *   ]
+ * }
+ * 
+ * CLOUD INTEGRATION (Azure Blob):
+ * - Lists all uploaded projects in Azure Blob Storage
+ * - Generates SAS (Shared Access Signature) tokens for read-only access
+ * - Resolves manifest URLs (octree.json location)
+ * - Attaches tokens to URLs so browser can fetch data
+ * 
+ * ERROR HANDLING:
+ * - If cloud fails: Returns empty array, doesn't crash
+ * - If SAS generation fails: Returns base URL (may not work from browser)
+ * - Logs warnings for debugging but doesn't block request
+ * 
+ * PERFORMANCE:
+ * - Caches SAS tokens (valid for time period)
+ * - Parallelizes manifest URL resolution (Promise.all)
+ * - Should return < 1 second for typical projects
+ * 
+ * SECURITY:
+ * - SAS tokens are read-only and time-limited
+ * - Tokens restricted to specific container
+ * - URLs are sanitized before SAS append
+ */
+
 // Vercel Serverless Function: GET /api/list
 const { getAzureClients, listBlobProjects, resolveCloudManifestUrl, getReadSasToken } = require('./_lib/azure');
 
@@ -8,6 +54,7 @@ module.exports = async (req, res) => {
 
         if (az.isCloudEnabled) {
             try {
+                // List all projects from Azure Blob Storage
                 const blobProjects = await listBlobProjects();
 
                 // Generate SAS token for read access
