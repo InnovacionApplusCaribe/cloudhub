@@ -436,6 +436,124 @@
             font-size: 16px;
         }
 
+        /* ── Premium GIS Feature Info Annotation ──────────── */
+        .annotation.gis-annotation {
+            opacity: 1 !important;
+            z-index: 100000 !important;
+            pointer-events: auto !important;
+        }
+
+        .annotation.gis-annotation .annotation-titlebar {
+            display: none !important;
+        }
+
+        .gis-feature-info-card {
+            background: rgba(15, 23, 42, 0.90); /* Slate 900 with opacity */
+            backdrop-filter: blur(12px) saturate(180%);
+            -webkit-backdrop-filter: blur(12px) saturate(180%);
+            border: 1px solid rgba(255, 255, 255, 0.15);
+            border-radius: 12px;
+            padding: 14px;
+            color: #f8fafc; /* Slate 50 */
+            min-width: 280px;
+            max-width: 350px;
+            font-family: 'Outfit', 'Inter', system-ui, sans-serif;
+            box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.5), 0 8px 10px -6px rgba(0, 0, 0, 0.5);
+            pointer-events: auto;
+            transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+        }
+
+        .gis-card-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+            margin-bottom: 10px;
+            padding-bottom: 8px;
+        }
+
+        .gis-card-title {
+            font-weight: 600;
+            font-size: 13px;
+            letter-spacing: 0.5px;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            color: #38bdf8; /* Sky 400 */
+        }
+
+        .gis-close-btn {
+            cursor: pointer;
+            color: #94a3b8; /* Slate 400 */
+            font-size: 16px;
+            font-weight: 700;
+            line-height: 1;
+            transition: all 0.2s;
+            width: 20px;
+            height: 20px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            border-radius: 50%;
+            background: rgba(255, 255, 255, 0.05);
+        }
+
+        .gis-close-btn:hover {
+            color: #ef4444; /* Red 500 */
+            background: rgba(239, 68, 68, 0.1);
+            transform: rotate(90deg);
+        }
+
+        .gis-card-body {
+            max-height: 220px;
+            overflow-y: auto;
+            scrollbar-width: thin;
+            scrollbar-color: rgba(255, 255, 255, 0.2) transparent;
+        }
+
+        .gis-card-body::-webkit-scrollbar {
+            width: 4px;
+        }
+
+        .gis-card-body::-webkit-scrollbar-thumb {
+            background: rgba(255, 255, 255, 0.2);
+            border-radius: 2px;
+        }
+
+        .gis-info-table {
+            width: 100%;
+            border-collapse: collapse;
+        }
+
+        .gis-info-table tr {
+            border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+            transition: background-color 0.2s;
+        }
+
+        .gis-info-table tr:hover {
+            background-color: rgba(255, 255, 255, 0.03);
+        }
+
+        .gis-info-table td {
+            padding: 6px 8px;
+            font-size: 11px;
+            vertical-align: middle;
+        }
+
+        .gis-attr-name {
+            font-weight: 500;
+            color: #94a3b8; /* Slate 400 */
+            width: 40%;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+
+        .gis-attr-value {
+            color: #e2e8f0; /* Slate 200 */
+            word-break: break-all;
+        }
+
         .layer-item .layer-actions {
             display: flex;
             gap: 8px;
@@ -913,86 +1031,7 @@
                     layerNode.name = label;
                     viewer.scene.addMeasurement(layerNode);
 
-                    // ━━━ ADD ANNOTATIONS FOR EACH FEATURE (Optimized Async) ━━━
-                    const layerAnnotation = new Potree.Annotation({
-                        title: label,
-                        visible: false 
-                    });
-                    viewer.scene.annotations.add(layerAnnotation);
-
-                    const addAnnotationsAsync = async () => {
-                        const features = shp.features;
-                        const batchSize = 100;
-                        const totalFeatures = features.length;
-                        // ━━━ Get point cloud offset to convert local → absolute coordinates ━━━
-                        const shpOffset = offset.clone();
-
-                        for (let i = 0; i < totalFeatures; i += batchSize) {
-                            const chunk = features.slice(i, i + batchSize);
-                            
-                            for (const feature of chunk) {
-                                if (!feature.geometry) continue;
-                                
-                                const props = feature.properties || {};
-                                const geomType = feature.geometry.type;
-                                
-                                // User request: Extract ID for points, ID & Risk for polygons
-                                let nameParts = [];
-                                const idKey = Object.keys(props).find(k => k.toLowerCase() === "id");
-                                if (idKey) nameParts.push(`ID: ${props[idKey]}`);
-                                
-                                if (geomType.includes("Polygon")) {
-                                    const riskKey = Object.keys(props).find(k => k.toLowerCase().includes("risk"));
-                                    if (riskKey) nameParts.push(`Risk: ${props[riskKey]}`);
-                                }
-                                
-                                let name = nameParts.length > 0 ? nameParts.join(" | ") : (props.name || props.NAME || props.Name || props.id || props.ID || "Feature");
-                                
-                                let centroid = [0, 0, 0];
-                                let foundPosition = false;
-
-                                if (geomType === "Point") {
-                                    centroid = feature.geometry.coordinates;
-                                    foundPosition = true;
-                                } else if (geomType === "Polygon" || geomType === "MultiPolygon" || geomType === "LineString") {
-                                    const points = geomType === "LineString" ? feature.geometry.coordinates : (geomType === "Polygon" ? feature.geometry.coordinates[0] : feature.geometry.coordinates[0][0]);
-                                    
-                                    if (points && points.length > 0) {
-                                        let sumX = 0, sumY = 0, sumZ = 0;
-                                        for (const pt of points) {
-                                            sumX += pt[0];
-                                            sumY += pt[1];
-                                            sumZ += pt[2] || groundZ;
-                                        }
-                                        centroid = [sumX / points.length, sumY / points.length, sumZ / points.length];
-                                        foundPosition = true;
-                                    }
-                                }
-
-                                if (foundPosition) {
-                                    // ━━━ Convert annotation position from local → absolute by adding offset ━━━
-                                    // (Coordinates are stored as local by transformArray, but annotations need absolute for camera nav)
-                                    const absCentroid = new THREE.Vector3(centroid[0], centroid[1], centroid[2]);
-                                    absCentroid.add(shpOffset);
-                                    
-                                    const featureAnnotation = new Potree.Annotation({
-                                        position: absCentroid,
-                                        title: name.toString()
-                                    });
-                                    featureAnnotation.featureProps = props;
-                                    layerAnnotation.add(featureAnnotation);
-                                }
-                            }
-                            
-                            if (totalFeatures > batchSize) {
-                                await new Promise(resolve => setTimeout(resolve, 0));
-                            }
-                        }
-                    };
-
-                    addAnnotationsAsync();
-
-                    layerNode.annotationGroup = layerAnnotation;
+                    // Do not create annotations for individual shapefile features to avoid overloading the 3D viewer display.
                     window.loadedLayers.push({ type: 'SHP', label, node: layerNode, visual: layerNode });
                     updateLayerBadge();
                     addLayerToList('SHP', label, layerNode);
@@ -1020,16 +1059,16 @@
                 return html + '</table>';
             }
 
-            // ── Optimized KML loader ───────────────────────────────
+            // ── KML to Shapefile Converter + Shapefile Renderer ───────────
             async function loadKMLIntoScene(textOrUrl, label, color = 0x00BFFF) {
                 try {
-                    const loader = new Potree.KmlLoader();
                     const pc = viewer.scene.pointclouds[0];
                     if (!pc) throw new Error("Load a point cloud first to provide coordinate context.");
 
                     const offset = pc.pcoGeometry ? pc.pcoGeometry.offset : new THREE.Vector3(0, 0, 0);
                     const pcProj = pc.projection || "";
                     const groundZ = pc.tightBoundingBox ? pc.tightBoundingBox.min.z : offset.z;
+                    const boundingBox = pc.boundingBox ? pc.boundingBox.clone() : null;
 
                     const transformArray = (coord) => {
                         let [lon, lat, alt] = coord;
@@ -1045,11 +1084,6 @@
                         return [targetX, targetY, targetZ];
                     };
 
-                    loader.transform = { forward: transformArray };
-                    loader.offset = offset.clone();
-                    loader.boundingBox = pc.boundingBox ? pc.boundingBox.clone() : null;
-                    loader.defaultZ = groundZ;
-
                     const progressContainer = document.getElementById('async-layer-progress-container');
                     const progressText = document.getElementById('async-layer-progress-text');
                     const progressBar = document.getElementById('async-layer-progress-bar');
@@ -1057,96 +1091,92 @@
                     
                     if (progressContainer) progressContainer.style.display = 'block';
 
+                    // ── Large file detection ──
+                    let inputSize = 0;
+                    if (typeof textOrUrl === 'string') {
+                        inputSize = textOrUrl.length;
+                    }
+                    if (inputSize > 5 * 1024 * 1024) {
+                        const sizeMB = (inputSize / (1024 * 1024)).toFixed(1);
+                        console.warn(`[KML] Large file detected: ${sizeMB} MB`);
+                        if (progressText) progressText.textContent = `⚠️ Converting KML to Shapefile (${sizeMB} MB)...`;
+                    }
+
                     const onProgress = (msg, percent) => {
                         if (progressText) progressText.textContent = msg;
                         if (percent !== null && percent !== undefined) {
                             if (progressBar) progressBar.style.width = `${percent}%`;
                             if (progressPercent) progressPercent.textContent = `${Math.round(percent)}%`;
                         }
+                        // ── Memory usage indicator (Chrome only) ──
+                        if (typeof performance !== 'undefined' && performance.memory) {
+                            const usedMB = (performance.memory.usedJSHeapSize / (1024 * 1024)).toFixed(0);
+                            const limitMB = (performance.memory.jsHeapSizeLimit / (1024 * 1024)).toFixed(0);
+                            const memPct = ((performance.memory.usedJSHeapSize / performance.memory.jsHeapSizeLimit) * 100).toFixed(0);
+                            if (progressPercent) {
+                                progressPercent.textContent = percent !== null && percent !== undefined
+                                    ? `${Math.round(percent)}% | Mem: ${usedMB}/${limitMB} MB (${memPct}%)`
+                                    : `Mem: ${usedMB}/${limitMB} MB (${memPct}%)`;
+                            }
+                        }
                     };
 
                     let fileInput = textOrUrl;
                     if (typeof textOrUrl === 'string' && !textOrUrl.startsWith('<?xml') && !textOrUrl.includes('<kml')) {
-                        // It is a URL
+                        // It is a URL - fetch it
                         fileInput = textOrUrl;
                     } else {
-                        // It is XML text, convert to a Blob so load can read it
+                        // It is XML text, convert to a Blob
                         fileInput = new Blob([textOrUrl], { type: 'text/xml' });
                     }
 
-                    const kmlResult = await loader.load(fileInput, color, onProgress);
+                    // ━━━ STEP 1: Convert KML to Shapefile-compatible GeoJSON ━━━
+                    if (progressText) progressText.textContent = "Converting KML to Shapefile format...";
+                    
+                    const converter = new Potree.KmlToShapefileConverter();
+                    const conversionResult = await converter.convertKmlToShapefile(fileInput, onProgress);
+                    const convertedFeatures = conversionResult.features;
+
+                    if (!convertedFeatures || convertedFeatures.length === 0) {
+                        throw new Error("No polygon geometries found in KML file. KML to Shapefile conversion requires polygon geometries.");
+                    }
+
+                    console.log(`[Layers] Converted KML: ${convertedFeatures.length} polygon features extracted for ${label}`);
+
+                    // ━━━ STEP 2: Use ShapefileLoader to render converted features ━━━
+                    if (progressText) progressText.textContent = "Rendering shapefile polygons...";
+                    
+                    const shapefileLoader = new Potree.ShapefileLoader();
+                    shapefileLoader.transform = { forward: transformArray };
+                    shapefileLoader.offset = offset.clone();
+                    shapefileLoader.defaultZ = groundZ;
+
+                    // Use the new loadFromFeatures method to process converted KML features
+                    const shapefileResult = await shapefileLoader.loadFromFeatures(convertedFeatures, color, onProgress);
                     
                     if (progressContainer) progressContainer.style.display = 'none';
 
-                    if (!kmlResult.features?.length) throw new Error("No features found in KML file");
-
-                    console.log(`[Layers] Loaded ${kmlResult.features.length} features for ${label}`);
-
-                    const layerNode = kmlResult.node;
+                    const layerNode = shapefileResult.node;
                     layerNode.name = label;
+                    layerNode.userData = {
+                        sourceFormat: 'KML (Converted to Shapefile)',
+                        conversionStats: conversionResult.stats,
+                        originalFeatureCount: convertedFeatures.length
+                    };
+
+                    // Ensure the GisLayer is added to the scene graph so it is rendered.
+                    // `addMeasurement()` registers the layer in the scene's measurements
+                    // array (used by UI), but does not automatically add Object3D nodes
+                    // to the Three.js scene — so add it explicitly.
+                    viewer.scene.scene.add(layerNode);
                     viewer.scene.addMeasurement(layerNode);
 
-                    // ━━━ ADD ANNOTATIONS FOR EACH FEATURE (Optimized Async) ━━━
-                    const layerAnnotation = new Potree.Annotation({
-                        title: label,
-                        visible: false 
-                    });
-
-                    const maxAnnos = 500;
-                    // ━━━ Get point cloud offset to convert local → absolute coordinates ━━━
-                    const pcOffset = pc.pcoGeometry ? pc.pcoGeometry.offset.clone() : new THREE.Vector3(0, 0, 0);
-                    
-                    kmlResult.features.forEach((feature, idx) => {
-                        if (idx >= maxAnnos) return;
-                        
-                        const props = feature.properties || {};
-                        const name = props.name || `Feature ${idx + 1}`;
-                        
-                        let annoPos = null;
-                        const geom = feature.geometry;
-                        if (geom) {
-                            if (geom.type === "Point") {
-                                annoPos = new THREE.Vector3(...geom.coordinates);
-                            } else if (geom.type === "LineString" && geom.coordinates.length > 0) {
-                                annoPos = new THREE.Vector3(...geom.coordinates[0]);
-                            } else if ((geom.type === "Polygon" || geom.type === "MultiPolygon") && geom.coordinates.length > 0) {
-                                const ring = geom.type === "Polygon" ? geom.coordinates[0] : geom.coordinates[0][0];
-                                if (ring && ring.length > 0) {
-                                    annoPos = new THREE.Vector3(...ring[0]);
-                                }
-                            }
-                        }
-
-                        if (annoPos) {
-                            // ━━━ Convert annotation position from local → absolute by adding offset ━━━
-                            // (Coordinates are stored as local in geometry, but annotations need absolute for camera nav)
-                            annoPos.add(pcOffset);
-                            const descriptionHtml = (function() {
-                                let html = '<table style="font-size: 0.9em; width: 100%; border-collapse: collapse;">';
-                                for (let k in props) {
-                                    html += `<tr style="border-bottom: 1px solid #444"><td style="padding:2px; font-weight:bold; color:var(--accent)">${k}</td><td style="padding:2px">${props[k]}</td></tr>`;
-                                }
-                                return html + '</table>';
-                            })();
-
-                            const anno = new Potree.Annotation({
-                                position: annoPos,
-                                title: name,
-                                description: descriptionHtml,
-                                visible: false
-                            });
-                            layerAnnotation.add(anno);
-                        }
-                    });
-
-                    viewer.scene.annotations.add(layerAnnotation);
-
-                    window.loadedLayers.push({ type: 'KML', label, node: layerNode, visual: layerNode });
+                    window.loadedLayers.push({ type: 'KML→Shapefile', label, node: layerNode, visual: layerNode });
                     updateLayerBadge();
-                    addLayerToList('KML', label, layerNode);
+                    addLayerToList('KML→Shapefile', label, layerNode);
                     return true;
                 } catch (e) {
-                    console.error('KML load error:', e);
+                    console.error('KML to Shapefile conversion error:', e);
                     showLayerError(e.message);
                     return false;
                 }
@@ -1377,78 +1407,200 @@
                 e.preventDefault(); kmlDZ.classList.remove('drag-over');
                 if (e.dataTransfer.files.length) uploadAndLoadLayer(e.dataTransfer.files, 'KML');
             });
-            // ── Interaction: Click GIS objects to show info ───────
+            // ── Interaction: Click / Touch GIS objects to show info ───────
             const raycaster = new THREE.Raycaster();
             raycaster.params.Line.threshold = 0.1;
             raycaster.params.Points.threshold = 0.2;
 
-            const onViewerClick = (event) => {
-                const rect = viewer.renderer.domElement.getBoundingClientRect();
-                const mouse = new THREE.Vector2(
-                    ((event.clientX - rect.left) / rect.width) * 2 - 1,
-                    -((event.clientY - rect.top) / rect.height) * 2 + 1
-                );
-
+            const onViewerInteract = (event) => {
                 const activeCamera = viewer.scene ? viewer.scene.getActiveCamera() : null;
                 if (!activeCamera) return;
+
+                const rect = viewer.renderer.domElement.getBoundingClientRect();
+                
+                let clientX, clientY;
+                if (event.changedTouches && event.changedTouches.length > 0) {
+                    clientX = event.changedTouches[0].clientX;
+                    clientY = event.changedTouches[0].clientY;
+                } else if (event.clientX !== undefined) {
+                    clientX = event.clientX;
+                    clientY = event.clientY;
+                } else {
+                    return;
+                }
+
+                const mouse = new THREE.Vector2(
+                    ((clientX - rect.left) / rect.width) * 2 - 1,
+                    -((clientY - rect.top) / rect.height) * 2 + 1
+                );
+
                 raycaster.setFromCamera(mouse, activeCamera);
 
-                const targets = window.loadedLayers.map(l => l.visual).filter(v => v);
-                const intersects = raycaster.intersectObjects(targets, true);
+                // Get all loaded GIS layer nodes
+                const gisLayers = window.loadedLayers
+                    .filter(l => l.type === 'SHP' || l.type === 'KML')
+                    .map(l => l.node);
 
-                if (intersects.length > 0) {
-                    const hit = intersects[0];
-                    const obj = hit.object;
+                let closestHit = null;
 
-                    // --- Batched GIS Selection Logic ---
-                    if (obj.isGISLayer && obj.userData.featureIndices) {
-                        const vertexIdx = hit.index;
-                        const featureIdx = obj.userData.featureIndices[vertexIdx];
-                        const features = obj.userData.features;
-                        const feature = features[featureIdx];
-
-                        if (feature) {
-                            const panel = document.getElementById('feature-info-panel');
-                            const content = document.getElementById('feature-info-content');
-                            const title = document.getElementById('feature-info-title');
-
-                            const props = feature.properties || feature; // Handle SHP vs KML
-                            const name = props.name || props.NAME || props.Name || props.id || props.ID || "Feature Detail";
-
-                            title.textContent = name;
-                            let tableHtml = '<table>';
-                            for (let key in props) {
-                                if (typeof props[key] === 'object') continue;
-                                tableHtml += `<tr><td class="attr-name">${key}</td><td>${props[key]}</td></tr>`;
-                            }
-                            tableHtml += '</table>';
-                            content.innerHTML = tableHtml;
-                            panel.style.display = 'flex';
-
-                            // Highlight Effect
-                            if (obj.isGISLayer) {
-                                const oldColor = obj.material.color.getHex();
-                                obj.material.color.setHex(0xFFFF00);
-                                setTimeout(() => { if (obj.material) obj.material.color.setHex(oldColor); }, 800);
-                            }
+                // Test pick on each loaded GIS layer
+                for (const gisLayer of gisLayers) {
+                    const result = gisLayer.pick(viewer, activeCamera, raycaster.ray);
+                    if (result && result.feature) {
+                        if (!closestHit || result.distance < closestHit.distance) {
+                            closestHit = {
+                                layer: gisLayer,
+                                feature: result.feature,
+                                distance: result.distance,
+                                point: result.point
+                            };
                         }
-                    } else if (obj.annotation) {
-                        // Handle individual objects if they exist
-                        const anno = obj.annotation;
+                    }
+                }
 
-                        // 3. Highlight Effect (Temporary)
-                        if (obj.material && obj.material.color) {
-                            const oldColor = obj.material.color.getHex();
-                            obj.material.color.setHex(0xFFFF00);
-                            setTimeout(() => {
-                                if (obj.material && obj.material.color) obj.material.color.setHex(oldColor);
-                            }, 2000);
+                if (closestHit) {
+                    const { layer, feature, point } = closestHit;
+
+                    // 1. Highlight feature
+                    layer.highlightFeature(feature);
+
+                    // 2. Dispatch GIS feature selection events
+                    const selectionEvent = {
+                        type: 'gis_feature_selected',
+                        feature: feature,
+                        layer: layer,
+                        point: point
+                    };
+                    layer.dispatchEvent(selectionEvent);
+                    viewer.dispatchEvent(selectionEvent);
+
+                    // 3. Resolve absolute positioning (adding point cloud offset)
+                    const pc = viewer.scene.pointclouds[0];
+                    const offset = pc ? (pc.pcoGeometry ? pc.pcoGeometry.offset : pc.position) : new THREE.Vector3(0, 0, 0);
+                    const absPoint = point.clone().add(offset);
+
+                    // 4. Create/update floating annotation in 3D scene
+                    if (!viewer.gisAnnotation) {
+                        viewer.gisAnnotation = new Potree.Annotation({
+                            position: absPoint,
+                            title: "Feature Info"
+                        });
+                        viewer.gisAnnotation.domElement.addClass('gis-annotation');
+                        viewer.scene.annotations.add(viewer.gisAnnotation);
+                    } else {
+                        viewer.gisAnnotation.position.copy(absPoint);
+                    }
+
+                    // Build premium dark-themed glassmorphic popup card
+                    const props = feature.feature.properties || {};
+                    const name = props.name || props.NAME || props.Name || props.id || props.ID || `Feature ${feature.id}`;
+
+                    let tbodyHtml = '';
+                    for (const key of Object.keys(props)) {
+                        if (typeof props[key] === 'object') continue;
+                        tbodyHtml += `
+                            <tr>
+                                <td class="gis-attr-name" title="${key}">${key}</td>
+                                <td class="gis-attr-value">${props[key]}</td>
+                            </tr>
+                        `;
+                    }
+
+                    const elPopup = $(`
+                        <div class="gis-feature-info-card">
+                            <div class="gis-card-header">
+                                <span class="gis-card-title">🗺️ ${name}</span>
+                                <span class="gis-close-btn">&times;</span>
+                            </div>
+                            <div class="gis-card-body">
+                                <table class="gis-info-table">
+                                    <tbody>
+                                        ${tbodyHtml || '<tr><td colspan="2" style="text-align:center;color:#94a3b8">No attributes available</td></tr>'}
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+                    `);
+
+                    elPopup.find('.gis-close-btn').click((e) => {
+                        e.stopPropagation();
+                        viewer.gisAnnotation.visible = false;
+                        layer.clearHighlight();
+                    });
+
+                    // Update annotation DOM content
+                    viewer.gisAnnotation.domElement.empty();
+                    viewer.gisAnnotation.domElement.append(elPopup);
+                    viewer.gisAnnotation.visible = true;
+                    
+                    // Style override fixes for Potree interaction
+                    viewer.gisAnnotation.domElement.css({
+                        'opacity': '1',
+                        'pointer-events': 'auto',
+                        'z-index': '100000'
+                    });
+                    viewer.gisAnnotation.domElement.off('mouseenter mouseleave touchstart');
+
+                    // 5. Populate side panel for compatibility
+                    const sidePanel = document.getElementById('feature-info-panel');
+                    const sideContent = document.getElementById('feature-info-content');
+                    const sideTitle = document.getElementById('feature-info-title');
+                    if (sidePanel && sideContent && sideTitle) {
+                        sideTitle.textContent = name;
+                        let sideTableHtml = '<table>';
+                        for (const key in props) {
+                            if (typeof props[key] === 'object') continue;
+                            sideTableHtml += `<tr><td class="attr-name">${key}</td><td>${props[key]}</td></tr>`;
                         }
+                        sideTableHtml += '</table>';
+                        sideContent.innerHTML = sideTableHtml;
+                        sidePanel.style.display = 'flex';
+                    }
+                } else {
+                    // Clicked on empty space: clear selection highlights and hide popups
+                    gisLayers.forEach(l => l.clearHighlight());
+                    
+                    if (viewer.gisAnnotation) {
+                        viewer.gisAnnotation.visible = false;
+                    }
+                    
+                    const sidePanel = document.getElementById('feature-info-panel');
+                    if (sidePanel) {
+                        sidePanel.style.display = 'none';
                     }
                 }
             };
 
-            viewer.renderer.domElement.addEventListener('click', onViewerClick);
+            // Touch gesture helper to detect short taps without dragging
+            let touchStartX = 0;
+            let touchStartY = 0;
+            let touchStartTime = 0;
+
+            const onViewerTouchStart = (event) => {
+                if (event.touches.length === 1) {
+                    touchStartX = event.touches[0].clientX;
+                    touchStartY = event.touches[0].clientY;
+                    touchStartTime = performance.now();
+                }
+            };
+
+            const onViewerTouchEnd = (event) => {
+                if (event.changedTouches.length === 1) {
+                    const diffX = event.changedTouches[0].clientX - touchStartX;
+                    const diffY = event.changedTouches[0].clientY - touchStartY;
+                    const dist = Math.sqrt(diffX * diffX + diffY * diffY);
+                    const duration = performance.now() - touchStartTime;
+
+                    // Match criteria for a gesture tap: minimal movement and short duration
+                    if (dist < 8 && duration < 250) {
+                        onViewerInteract(event);
+                    }
+                }
+            };
+
+            viewer.renderer.domElement.addEventListener('click', onViewerInteract);
+            viewer.renderer.domElement.addEventListener('touchstart', onViewerTouchStart, { passive: true });
+            viewer.renderer.domElement.addEventListener('touchend', onViewerTouchEnd, { passive: true });
 
             kmlInput.onchange = (e) => { if (e.target.files.length) uploadAndLoadLayer(e.target.files, 'KML'); };
 

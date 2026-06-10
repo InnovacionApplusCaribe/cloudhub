@@ -10,6 +10,28 @@ export class ShapefileLoader {
 		this.defaultZ = null;
 	}
 
+	/**
+	 * Load and process features directly (for converted KML or other GeoJSON sources)
+	 * This method bypasses shapefile file fetching and directly processes features
+	 * 
+	 * @param {Array<Object>} features - GeoJSON-like features with geometry objects
+	 * @param {number} color - Three.js color integer (default: 0x00FF41)
+	 * @param {Function} onProgress - Progress callback (msg, percent)
+	 * @returns {Promise<Object>} Object with features array and Three.js node
+	 */
+	async loadFromFeatures(features, color = 0x00FF41, onProgress = null) {
+		const reportProgress = (msg, percent) => {
+			if (onProgress) onProgress(msg, percent);
+		};
+
+		reportProgress("Processing feature geometries...", 0);
+		
+		// Delegate to shared processing method
+		const result = await this._processFeaturesToScene(features, color, reportProgress);
+		
+		return result;
+	}
+
 	async load(path, color = 0x00FF41, onProgress = null) {
 		const reportProgress = (msg, percent) => {
 			if (onProgress) onProgress(msg, percent);
@@ -17,6 +39,23 @@ export class ShapefileLoader {
 
 		reportProgress("Downloading shapefile...", 0);
 		const features = await this.loadShapefileFeatures(path, reportProgress);
+		
+		// Delegate to shared processing method
+		const result = await this._processFeaturesToScene(features, color, reportProgress);
+		
+		return result;
+	}
+
+	/**
+	 * Shared feature processing method used by both load() and loadFromFeatures()
+	 * Converts GeoJSON features to Three.js scene nodes with visualization meshes
+	 * @private
+	 */
+	async _processFeaturesToScene(features, color = 0x00FF41, reportProgress = null) {
+		const report = (msg, percent) => {
+			if (reportProgress) reportProgress(msg, percent);
+		};
+
 		const node = new GisLayer("Shapefile Layer");
 		node.color = color;
 		const threeColor = new THREE.Color(color);
@@ -69,7 +108,7 @@ export class ShapefileLoader {
 				
 				// Yield more frequently to keep UI responsive
 				if (performance.now() - lastYieldTime > 20) {
-					reportProgress(`Processing feature geometries (${processedFeatures}/${totalFeatures})...`, (processedFeatures / totalFeatures) * 50);
+					report(`Processing feature geometries (${processedFeatures}/${totalFeatures})...`, (processedFeatures / totalFeatures) * 50);
 					await new Promise(resolve => setTimeout(resolve, 0));
 					lastYieldTime = performance.now();
 				}
@@ -189,7 +228,7 @@ export class ShapefileLoader {
 						
 						// Yield within MultiPolygon for very complex features
 						if (performance.now() - lastYieldTime > 20) {
-							reportProgress(`Processing MultiPolygon (${processedFeatures}/${totalFeatures})...`, (processedFeatures / totalFeatures) * 50);
+							report(`Processing MultiPolygon (${processedFeatures}/${totalFeatures})...`, (processedFeatures / totalFeatures) * 50);
 							await new Promise(resolve => setTimeout(resolve, 0));
 							lastYieldTime = performance.now();
 						}
@@ -311,7 +350,7 @@ export class ShapefileLoader {
 
 				// Yield based on time to prevent any heavy polygon from freezing
 				if (performance.now() - lastYieldTime > 30) {
-					reportProgress(`Building meshes (${i}/${shapesArray.length})...`, 50 + (i / shapesArray.length) * 50);
+					report(`Building meshes (${i}/${shapesArray.length})...`, 50 + (i / shapesArray.length) * 50);
 					await new Promise(resolve => setTimeout(resolve, 0));
 					lastYieldTime = performance.now();
 				}
@@ -359,7 +398,7 @@ export class ShapefileLoader {
 
 						// Yield during merge to keep main thread alive
 						if (performance.now() - mergeStartTime > 20) {
-							reportProgress(`Merging layer geometries (${k}/${geos.length})...`, 90 + (k / geos.length) * 10);
+							report(`Merging layer geometries (${k}/${geos.length})...`, 90 + (k / geos.length) * 10);
 							await new Promise(resolve => setTimeout(resolve, 0));
 							mergeStartTime = performance.now();
 						}
@@ -403,7 +442,7 @@ export class ShapefileLoader {
 		return {
 			features: features,
 			node: node
-		};
+		}
 	}
 
 	async loadShapefileFeatures(file, reportProgress) {

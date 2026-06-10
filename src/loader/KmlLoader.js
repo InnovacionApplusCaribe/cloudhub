@@ -1,6 +1,15 @@
 import * as THREE from "../../libs/three.js/build/three.module.js";
 import { GisLayer } from "../utils/GisLayer.js";
 
+// ━━━ Configuration Constants ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+const MAX_FEATURES = 20000;              // Hard limit on parsed features
+const MAX_VERTICES_PER_RING = 5000;      // Simplification threshold per polygon ring
+const GEOMETRY_CHUNK_SIZE = 200;         // Shapes processed per merge chunk
+const PARSE_BATCH_SIZE = 500;            // Placemarks parsed per yield
+const MEMORY_WARNING_THRESHOLD = 0.80;   // % of heap when simplification increases
+const MEMORY_ABORT_THRESHOLD = 0.90;     // % of heap when processing stops
+const OUTLINE_SKIP_THRESHOLD = 5000;     // Polygon count above which outlines are skipped
+
 export class KmlLoader {
 
 	constructor() {
@@ -8,6 +17,96 @@ export class KmlLoader {
 		this.offset = new THREE.Vector3(0, 0, 0);
 		this.boundingBox = null;
 		this.defaultZ = null;
+	}
+
+	// ━━━ Memory Pressure Detection ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+	_checkMemoryPressure() {
+		// performance.memory is only available in Chromium-based browsers
+		if (typeof performance !== 'undefined' && performance.memory) {
+			const used = performance.memory.usedJSHeapSize;
+			const limit = performance.memory.jsHeapSizeLimit;
+			const ratio = used / limit;
+			return { ratio, used, limit, available: true };
+		}
+		return { ratio: 0, used: 0, limit: 0, available: false };
+	}
+
+	// ━━━ Douglas-Peucker Ring Simplification ━━━━━━━━━━━━━━━━━━━━━
+	_simplifyRing(coords, tolerance) {
+		if (coords.length <= 4) return coords; // Minimum viable polygon (triangle + close)
+
+		const sqDist = (p, a, b) => {
+			const dx = b[0] - a[0];
+			const dy = b[1] - a[1];
+			const lenSq = dx * dx + dy * dy;
+			if (lenSq === 0) {
+				const ex = p[0] - a[0];
+				const ey = p[1] - a[1];
+				return ex * ex + ey * ey;
+			}
+			let t = ((p[0] - a[0]) * dx + (p[1] - a[1]) * dy) / lenSq;
+			t = Math.max(0, Math.min(1, t));
+			const projX = a[0] + t * dx;
+			const projY = a[1] + t * dy;
+			const ex = p[0] - projX;
+			const ey = p[1] - projY;
+			return ex * ex + ey * ey;
+		};
+
+		const toleranceSq = tolerance * tolerance;
+
+		const simplify = (start, end, keep) => {
+			let maxDist = 0;
+			let maxIdx = start;
+			for (let i = start + 1; i < end; i++) {
+				const d = sqDist(coords[i], coords[start], coords[end]);
+				if (d > maxDist) {
+					maxDist = d;
+					maxIdx = i;
+				}
+			}
+			if (maxDist > toleranceSq) {
+				keep[maxIdx] = true;
+				if (maxIdx - start > 1) simplify(start, maxIdx, keep);
+				if (end - maxIdx > 1) simplify(maxIdx, end, keep);
+			}
+		};
+
+		const keep = new Array(coords.length).fill(false);
+		keep[0] = true;
+		keep[coords.length - 1] = true;
+		simplify(0, coords.length - 1, keep);
+
+		const result = [];
+		for (let i = 0; i < coords.length; i++) {
+			if (keep[i]) result.push(coords[i]);
+		}
+
+		// Ensure ring closure
+		if (result.length >= 2) {
+			const first = result[0];
+			const last = result[result.length - 1];
+			if (first[0] !== last[0] || first[1] !== last[1]) {
+				result.push([...first]);
+			}
+		}
+
+		// Must have at least 4 points for a valid polygon ring
+		return result.length >= 4 ? result : coords;
+	}
+
+	_computeRingTolerance(ring) {
+		let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+		for (const coord of ring) {
+			if (coord[0] < minX) minX = coord[0];
+			if (coord[1] < minY) minY = coord[1];
+			if (coord[0] > maxX) maxX = coord[0];
+			if (coord[1] > maxY) maxY = coord[1];
+		}
+		const dx = maxX - minX;
+		const dy = maxY - minY;
+		const diagonal = Math.sqrt(dx * dx + dy * dy);
+		return diagonal * 0.001; // 0.1% of extent diagonal
 	}
 
 	async load(path, color = 0x00BFFF, onProgress = null) {
@@ -113,8 +212,29 @@ export class KmlLoader {
 		let processedFeatures = 0;
 		let lastYieldTime = performance.now();
 
+		// ━━━ Memory pressure tracking for adaptive simplification ━━━
+		let aggressiveSimplification = false;
+		let memoryAborted = false;
+		let totalVerticesProcessed = 0;
+
 		for (const feature of features) {
 			processedFeatures++;
+
+			// ━━━ Memory check every 100 features ━━━
+			if (processedFeatures % 100 === 0) {
+				const mem = this._checkMemoryPressure();
+				if (mem.available) {
+					if (mem.ratio >= MEMORY_ABORT_THRESHOLD) {
+						console.warn(`[KmlLoader] Memory abort threshold reached (${(mem.ratio * 100).toFixed(1)}%). Stopping at feature ${processedFeatures}/${totalFeatures}.`);
+						reportProgress(`⚠️ Memory limit reached — loaded ${processedFeatures} of ${totalFeatures} features`, 100);
+						memoryAborted = true;
+						break;
+					} else if (mem.ratio >= MEMORY_WARNING_THRESHOLD && !aggressiveSimplification) {
+						console.warn(`[KmlLoader] Memory warning threshold reached (${(mem.ratio * 100).toFixed(1)}%). Increasing simplification.`);
+						aggressiveSimplification = true;
+					}
+				}
+			}
 			
 			// Yield more frequently to keep UI responsive
 			if (performance.now() - lastYieldTime > 20) {
@@ -139,6 +259,7 @@ export class KmlLoader {
 
 				geometry.coordinates = [x, y, z]; // Update for picking
 				pointPositions.push(x, y, z);
+				totalVerticesProcessed++;
 			} else if (geometry.type === "LineString") {
 				const coords = geometry.coordinates;
 				for (let i = 0; i < coords.length; i++) {
@@ -165,14 +286,27 @@ export class KmlLoader {
 							linePositions.push(nextX, nextY, nextZ);
 						}
 					}
+					totalVerticesProcessed++;
 				}
 			} else if (geometry.type === "Polygon" || geometry.type === "MultiPolygon") {
+				// ━━━ Skip fills under extreme memory pressure ━━━
+				const skipFills = aggressiveSimplification;
+
 				const parsePolygon = (polygonCoords) => {
 					if (!polygonCoords || polygonCoords.length === 0) return;
 
-					let shape = new THREE.Shape();
+					let shape = skipFills ? null : new THREE.Shape();
 					let shapeZ = defaultZ;  // Will store transformed Z coordinate
 					let outerRing = polygonCoords[0];
+
+					// ━━━ Simplify ring if it exceeds vertex threshold ━━━
+					if (outerRing.length > MAX_VERTICES_PER_RING || aggressiveSimplification) {
+						const tolerance = aggressiveSimplification
+							? this._computeRingTolerance(outerRing) * 5  // 5x more aggressive
+							: this._computeRingTolerance(outerRing);
+						outerRing = this._simplifyRing(outerRing, tolerance);
+						polygonCoords[0] = outerRing;
+					}
 
 					for (let i = 0; i < outerRing.length; i++) {
 						const zInput = outerRing[i][2] !== undefined ? outerRing[i][2] : defaultZ;
@@ -190,19 +324,32 @@ export class KmlLoader {
 
 						outerRing[i] = [x, y, z]; // Update for picking
 
-						if (i === 0) shape.moveTo(x, y);
-						else shape.lineTo(x, y);
+						if (shape) {
+							if (i === 0) shape.moveTo(x, y);
+							else shape.lineTo(x, y);
+						}
 
 						if (i > 0) {
 							const prev = outerRing[i - 1];
 							polygonOutlinePositions.push(prev[0], prev[1], prev[2]);
 							polygonOutlinePositions.push(x, y, z);
 						}
+						totalVerticesProcessed++;
 					}
 
 					for (let r = 1; r < polygonCoords.length; r++) {
-						let hole = new THREE.Path();
+						let hole = skipFills ? null : new THREE.Path();
 						let holeRing = polygonCoords[r];
+
+						// ━━━ Simplify hole rings too ━━━
+						if (holeRing.length > MAX_VERTICES_PER_RING || aggressiveSimplification) {
+							const tolerance = aggressiveSimplification
+								? this._computeRingTolerance(holeRing) * 5
+								: this._computeRingTolerance(holeRing);
+							holeRing = this._simplifyRing(holeRing, tolerance);
+							polygonCoords[r] = holeRing;
+						}
+
 						for (let i = 0; i < holeRing.length; i++) {
 							const zInput = holeRing[i][2] !== undefined ? holeRing[i][2] : defaultZ;
 							const p = transform.forward([holeRing[i][0], holeRing[i][1], zInput]);
@@ -213,21 +360,26 @@ export class KmlLoader {
 
 							holeRing[i] = [x, y, z]; // Update for picking
 
-							if (i === 0) hole.moveTo(x, y);
-							else hole.lineTo(x, y);
+							if (hole) {
+								if (i === 0) hole.moveTo(x, y);
+								else hole.lineTo(x, y);
+							}
 
 							if (i > 0) {
 								const prev = holeRing[i - 1];
 								polygonOutlinePositions.push(prev[0], prev[1], prev[2]);
 								polygonOutlinePositions.push(x, y, z);
 							}
+							totalVerticesProcessed++;
 						}
-						shape.holes.push(hole);
+						if (shape && hole) shape.holes.push(hole);
 					}
 
-					// Store the transformed Z coordinate (already adjusted for offset)
-					shape.zOffset = shapeZ;
-					shapesArray.push(shape);
+					if (shape) {
+						// Store the transformed Z coordinate (already adjusted for offset)
+						shape.zOffset = shapeZ;
+						shapesArray.push(shape);
+					}
 				};
 
 				if (geometry.type === "Polygon") {
@@ -246,6 +398,12 @@ export class KmlLoader {
 				}
 			}
 		}
+
+		if (memoryAborted) {
+			console.warn(`[KmlLoader] Partial load: ${processedFeatures} features, ${totalVerticesProcessed} vertices processed before memory abort.`);
+		}
+
+		console.log(`[KmlLoader] Processed ${processedFeatures} features, ${totalVerticesProcessed} total vertices, ${shapesArray.length} polygon shapes.`);
 
 		// ━━━ ENHANCED VISUALIZATION ━━━
 
@@ -308,7 +466,7 @@ export class KmlLoader {
 			node.add(segments);
 		}
 
-		// Create Polygons
+		// Create Polygons — ━━━ CHUNKED GEOMETRY BUILDING ━━━
 		if (shapesArray.length > 0) {
 			const polygonGroup = new THREE.Group();
 			polygonGroup.name = "Polygons";
@@ -334,90 +492,81 @@ export class KmlLoader {
 				opacity: 1.0
 			});
 
-			const fillGeometries = [];
-			
-			for (let i = 0; i < shapesArray.length; i++) {
-				const shape = shapesArray[i];
-				const geometry = new GeometryClass(shape);
-				const shapeZ = shape.zOffset !== undefined ? shape.zOffset : 0;
+			// ━━━ Process shapes in chunks to limit peak memory ━━━
+			const chunkGeometries = [];
+			const totalShapes = shapesArray.length;
 
-				if (geometry.attributes && geometry.attributes.position) {
-					const posAttr = geometry.attributes.position;
-					for (let j = 0; j < posAttr.count; j++) {
-						posAttr.setZ(j, shapeZ);
+			for (let chunkStart = 0; chunkStart < totalShapes; chunkStart += GEOMETRY_CHUNK_SIZE) {
+				const chunkEnd = Math.min(chunkStart + GEOMETRY_CHUNK_SIZE, totalShapes);
+				const chunkFillGeometries = [];
+
+				for (let i = chunkStart; i < chunkEnd; i++) {
+					const shape = shapesArray[i];
+					let shapeGeom;
+					try {
+						shapeGeom = new GeometryClass(shape);
+					} catch (e) {
+						console.warn(`[KmlLoader] Failed to triangulate shape ${i}:`, e.message);
+						continue;
+					}
+					const shapeZ = shape.zOffset !== undefined ? shape.zOffset : 0;
+
+					if (shapeGeom.attributes && shapeGeom.attributes.position) {
+						const posAttr = shapeGeom.attributes.position;
+						for (let j = 0; j < posAttr.count; j++) {
+							posAttr.setZ(j, shapeZ);
+						}
+					}
+
+					chunkFillGeometries.push(shapeGeom);
+				}
+
+				// Merge this chunk into a single BufferGeometry
+				if (chunkFillGeometries.length > 0) {
+					const mergedChunk = this._mergeGeometries(chunkFillGeometries);
+					chunkGeometries.push(mergedChunk);
+
+					// Dispose individual geometries immediately to free memory
+					for (const g of chunkFillGeometries) {
+						g.dispose();
 					}
 				}
 
-				fillGeometries.push(geometry);
+				// Yield to UI thread between chunks
+				reportProgress(`Building meshes (${Math.min(chunkEnd, totalShapes)}/${totalShapes})...`, 50 + (chunkEnd / totalShapes) * 40);
+				await new Promise(resolve => setTimeout(resolve, 0));
+				lastYieldTime = performance.now();
 
-				if (performance.now() - lastYieldTime > 30) {
-					reportProgress(`Building meshes (${i}/${shapesArray.length})...`, 50 + (i / shapesArray.length) * 50);
-					await new Promise(resolve => setTimeout(resolve, 0));
-					lastYieldTime = performance.now();
+				// ━━━ Memory check between chunks ━━━
+				const mem = this._checkMemoryPressure();
+				if (mem.available && mem.ratio >= MEMORY_ABORT_THRESHOLD) {
+					console.warn(`[KmlLoader] Memory abort during geometry building. Processed ${chunkEnd}/${totalShapes} shapes.`);
+					break;
 				}
 			}
 
-			if (fillGeometries.length > 0) {
-				const mergeGeometriesAsync = async (geos) => {
-					const merged = new THREE.BufferGeometry();
-					let totalVertices = 0;
-					let totalIndices = 0;
-					
-					for (const g of geos) {
-						if (!g.attributes || !g.attributes.position) continue;
-						totalVertices += g.attributes.position.count;
-						if (g.index) totalIndices += g.index.count;
-					}
+			// Final merge of chunk geometries (far fewer, smaller geometries)
+			if (chunkGeometries.length > 0) {
+				reportProgress(`Final geometry merge...`, 90);
+				await new Promise(resolve => setTimeout(resolve, 0));
 
-					if (totalVertices === 0) return merged;
-
-					const positions = new Float32Array(totalVertices * 3);
-					const indices = totalVertices > 65535 ? new Uint32Array(totalIndices) : new Uint16Array(totalIndices);
-					
-					let vOffset = 0;
-					let iOffset = 0;
-					let mergeStartTime = performance.now();
-					
-					for (let k = 0; k < geos.length; k++) {
-						const g = geos[k];
-						if (!g.attributes || !g.attributes.position) continue;
-						
-						positions.set(g.attributes.position.array, vOffset * 3);
-						
-						if (g.index) {
-							const indexArray = g.index.array;
-							const indexCount = g.index.count;
-							for (let i = 0; i < indexCount; i++) {
-								indices[iOffset + i] = indexArray[i] + vOffset;
-							}
-							iOffset += indexCount;
-						}
-						
-						vOffset += g.attributes.position.count;
+				let mergedFillGeom;
+				if (chunkGeometries.length === 1) {
+					mergedFillGeom = chunkGeometries[0];
+				} else {
+					mergedFillGeom = this._mergeGeometries(chunkGeometries);
+					// Dispose chunk geometries
+					for (const g of chunkGeometries) {
 						g.dispose();
-
-						if (performance.now() - mergeStartTime > 20) {
-							reportProgress(`Merging layer geometries (${k}/${geos.length})...`, 90 + (k / geos.length) * 10);
-							await new Promise(resolve => setTimeout(resolve, 0));
-							mergeStartTime = performance.now();
-						}
 					}
+				}
 
-					merged.setAttribute('position', new THREE.BufferAttribute(positions, 3));
-					if (totalIndices > 0) merged.setIndex(new THREE.BufferAttribute(indices, 1));
-					
-					merged.computeBoundingBox();
-					merged.computeBoundingSphere();
-					
-					return merged;
-				};
-
-				const mergedFillGeom = await mergeGeometriesAsync(fillGeometries);
 				const fillMesh = new THREE.Mesh(mergedFillGeom, fillMaterial);
 				fillMesh.renderOrder = 10;
 				polygonGroup.add(fillMesh);
 
-				if (polygonOutlinePositions.length > 0) {
+				// ━━━ Skip outlines for very large polygon counts ━━━
+				if (polygonOutlinePositions.length > 0 && totalShapes <= OUTLINE_SKIP_THRESHOLD) {
 					const outGeom = new THREE.BufferGeometry();
 					outGeom.setAttribute('position', new THREE.Float32BufferAttribute(polygonOutlinePositions, 3));
 					outGeom.computeBoundingBox();
@@ -425,6 +574,8 @@ export class KmlLoader {
 					const outlineMesh = new THREE.LineSegments(outGeom, outlineMaterial);
 					outlineMesh.renderOrder = 11;
 					polygonGroup.add(outlineMesh);
+				} else if (totalShapes > OUTLINE_SKIP_THRESHOLD) {
+					console.log(`[KmlLoader] Skipping outline rendering for ${totalShapes} polygons (threshold: ${OUTLINE_SKIP_THRESHOLD}).`);
 				}
 			}
 
@@ -438,6 +589,52 @@ export class KmlLoader {
 			features: features,
 			node: node
 		};
+	}
+
+	// ━━━ Synchronous geometry merge helper ━━━━━━━━━━━━━━━━━━━━━━━
+	_mergeGeometries(geos) {
+		const merged = new THREE.BufferGeometry();
+		let totalVertices = 0;
+		let totalIndices = 0;
+		
+		for (const g of geos) {
+			if (!g.attributes || !g.attributes.position) continue;
+			totalVertices += g.attributes.position.count;
+			if (g.index) totalIndices += g.index.count;
+		}
+
+		if (totalVertices === 0) return merged;
+
+		const positions = new Float32Array(totalVertices * 3);
+		const indices = totalVertices > 65535 ? new Uint32Array(totalIndices) : new Uint16Array(totalIndices);
+		
+		let vOffset = 0;
+		let iOffset = 0;
+		
+		for (const g of geos) {
+			if (!g.attributes || !g.attributes.position) continue;
+			
+			positions.set(g.attributes.position.array, vOffset * 3);
+			
+			if (g.index) {
+				const indexArray = g.index.array;
+				const indexCount = g.index.count;
+				for (let i = 0; i < indexCount; i++) {
+					indices[iOffset + i] = indexArray[i] + vOffset;
+				}
+				iOffset += indexCount;
+			}
+			
+			vOffset += g.attributes.position.count;
+		}
+
+		merged.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+		if (totalIndices > 0) merged.setIndex(new THREE.BufferAttribute(indices, 1));
+		
+		merged.computeBoundingBox();
+		merged.computeBoundingSphere();
+		
+		return merged;
 	}
 
 	async loadKmlFeatures(file, reportProgress) {
@@ -460,10 +657,29 @@ export class KmlLoader {
 			throw new Error("Unsupported file source type.");
 		}
 
+		// ━━━ Large file warning ━━━
+		const fileSizeMB = (kmlText.length / (1024 * 1024)).toFixed(1);
+		if (kmlText.length > 5 * 1024 * 1024) {
+			console.warn(`[KmlLoader] Large KML file detected: ${fileSizeMB} MB. Processing may take longer.`);
+			if (reportProgress) reportProgress(`⚠️ Large KML file (${fileSizeMB} MB) — parsing...`, null);
+		}
+
 		const parser = new DOMParser();
 		const doc = parser.parseFromString(kmlText, 'text/xml');
+		
+		// ━━━ Release kmlText immediately to free memory ━━━
+		kmlText = null;
+
 		const placemarks = doc.querySelectorAll('Placemark');
 		
+		// ━━━ Feature count limit check ━━━
+		const totalPlacemarks = placemarks.length;
+		if (totalPlacemarks > MAX_FEATURES) {
+			console.warn(`[KmlLoader] KML contains ${totalPlacemarks} placemarks, exceeding limit of ${MAX_FEATURES}. Only the first ${MAX_FEATURES} will be processed.`);
+			if (reportProgress) reportProgress(`⚠️ Large file: processing first ${MAX_FEATURES} of ${totalPlacemarks} features...`, null);
+		}
+		const maxToProcess = Math.min(totalPlacemarks, MAX_FEATURES);
+
 		const features = [];
 		let count = 0;
 		let lastYieldTime = performance.now();
@@ -484,7 +700,9 @@ export class KmlLoader {
 			return coords;
 		};
 
-		for (const pm of placemarks) {
+		// ━━━ Process placemarks in batches ━━━
+		for (let pmIdx = 0; pmIdx < maxToProcess; pmIdx++) {
+			const pm = placemarks[pmIdx];
 			const nameEl = pm.querySelector('name');
 			const name = (nameEl && nameEl.textContent) ? nameEl.textContent.trim() : 'Unnamed';
 			const descEl = pm.querySelector('description');
@@ -548,12 +766,19 @@ export class KmlLoader {
 			}
 
 			count++;
-			if (performance.now() - lastYieldTime > 20) {
-				if (reportProgress) reportProgress(`Parsing KML features (${count}/${placemarks.length})...`, null);
+
+			// ━━━ Yield every PARSE_BATCH_SIZE placemarks ━━━
+			if (count % PARSE_BATCH_SIZE === 0 || performance.now() - lastYieldTime > 20) {
+				if (reportProgress) reportProgress(`Parsing KML features (${count}/${maxToProcess})...`, null);
 				await new Promise(resolve => setTimeout(resolve, 0));
 				lastYieldTime = performance.now();
 			}
 		}
+
+		// ━━━ Release DOM document to free memory ━━━
+		// The doc variable will be garbage collected when it goes out of scope,
+		// but we explicitly null it for clarity
+		// (doc is const so we can't reassign, but it goes out of scope here)
 
 		return features;
 	}
