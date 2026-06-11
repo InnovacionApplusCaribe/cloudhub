@@ -21,9 +21,15 @@ module.exports = async (req, res) => {
         const contentLength = response.headers.get('content-length');
         if (contentLength) res.setHeader('Content-Length', contentLength);
 
-        // Buffer the response and send it
-        const buffer = Buffer.from(await response.arrayBuffer());
-        res.status(200).send(buffer);
+        // Vercel serverless environment (Node.js runtime)
+        // Convert the Web Stream to a Node Stream and pipe it to avoid buffering the entire file in memory
+        if (response.body) {
+            const { Readable } = require('stream');
+            Readable.fromWeb(response.body).pipe(res);
+        } else {
+            // Fallback for unexpected empty body
+            res.status(200).end();
+        }
     } catch (err) {
         console.error('[Proxy] Error:', err.message);
         res.status(500).json({ error: err.message });

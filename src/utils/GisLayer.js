@@ -265,7 +265,14 @@ export class GisLayer extends THREE.Object3D {
 		// Transform ray into local space of the layer
 		const localRay = ray.clone();
 		this.updateMatrixWorld();
-		const inverseMatrix = new THREE.Matrix4().getInverse(this.matrixWorld);
+		
+		const inverseMatrix = new THREE.Matrix4();
+		if (inverseMatrix.invert) {
+			inverseMatrix.copy(this.matrixWorld).invert();
+		} else {
+			inverseMatrix.getInverse(this.matrixWorld);
+		}
+		
 		localRay.applyMatrix4(inverseMatrix);
 
 		let minDistance = params.precision || 5.0; // Distance threshold for "hitting" a vector
@@ -408,19 +415,17 @@ export class GisLayer extends THREE.Object3D {
 
 		const { grid, gridSize, min, dx, dy } = this._spatialIndex;
 
-		// Find the ray's XY intersection with the bounding box plane
-		// Use a point on the ray closest to the center of the bounding box
-		const bbCenter = new THREE.Vector3(
-			min.x + dx / 2,
-			min.y + dy / 2,
-			this.boundingBox.getCenter(new THREE.Vector3()).z
-		);
-		const closestPt = new THREE.Vector3();
-		localRay.closestPointToPoint(bbCenter, closestPt);
+		// Intersect the ray with the layer's 2D plane (Z-elevation)
+		const planeZ = this.boundingBox.getCenter(new THREE.Vector3()).z || 0;
+		const plane = new THREE.Plane(new THREE.Vector3(0, 0, 1), -planeZ);
+		const intersectionPt = new THREE.Vector3();
+		const intersectResult = localRay.intersectPlane(plane, intersectionPt);
 
-		// Map to grid cell and check a 3x3 neighborhood
-		const cellX = Math.floor(((closestPt.x - min.x) / dx) * gridSize);
-		const cellY = Math.floor(((closestPt.y - min.y) / dy) * gridSize);
+		if (!intersectResult) return this.features; // Ray parallel to the plane, fallback
+
+		// Map to grid cell and check neighborhood
+		const cellX = Math.floor(((intersectionPt.x - min.x) / dx) * gridSize);
+		const cellY = Math.floor(((intersectionPt.y - min.y) / dy) * gridSize);
 
 		const seen = new Set();
 		const candidates = [];
